@@ -1,7 +1,12 @@
 # M1 (data foundation) dependencies.
 # Dependency policy: add per milestone only; no unapproved dependencies
 # (skills/rag-feature-spec "Implementation guardrails").
-# chromadb / scikit-learn / streamlit will be added in M2/M3/M5 respectively.
+# M3 note: knowledge retrieval ships as a dependency-free lexical TF-IDF
+# baseline (numpy) instead of chromadb — chromadb's default embedding
+# downloads a model from the network on first use, breaking offline
+# determinism. Revisit when a real embedding model is approved
+# (specs/2026-10-26-milestone-3-knowledge-rag/requirements.md §4).
+# streamlit is still planned for M5.
 pydantic>=2.9
 fastapi>=0.115
 uvicorn>=0.30

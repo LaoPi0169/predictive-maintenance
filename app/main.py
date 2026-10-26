@@ -2,10 +2,14 @@
 
 M1 scope: health check and the read-only assets listing (spec section 8.3).
 M2 adds ``POST /api/v1/predictions`` per the section 8.3/8.4 contract.
-Assessment and work-order endpoints arrive in M4. Following spec section
-8.4: unavailable capabilities must fail explicitly (404 / 503), never with
-fabricated data - "low risk" and "cannot reliably assess" are different
-answers and must never be conflated.
+M3 adds ``POST /api/v1/knowledge/search`` - a demonstration surface for the
+retriever the M4 agent tool will call as a library (same /health precedent:
+declared addition beyond the section 8.3 table). Assessment and work-order
+endpoints arrive in M4. Following spec section 8.4: unavailable capabilities
+must fail explicitly (404 / 503), never with fabricated data - "low risk"
+and "cannot reliably assess" are different answers and must never be
+conflated; likewise a stale knowledge index refuses to answer instead of
+serving outdated SOPs.
 """
 
 from __future__ import annotations
@@ -16,14 +20,26 @@ from pydantic import BaseModel, Field
 
 from app import config
 from app.database import repository
+from app.knowledge.retriever import (
+    KnowledgeIndex,
+    KnowledgeIndexMissingError,
+    KnowledgeIndexStaleError,
+)
 from app.prediction.predict import (
     AssetNotFoundError,
     InsufficientDataError,
     assess_asset,
 )
-from app.schemas import Asset, EvidenceItem, PredictionRecord, RiskAssessment
+from app.schemas import (
+    Asset,
+    DocType,
+    EvidenceItem,
+    PredictionRecord,
+    RetrievalResult,
+    RiskAssessment,
+)
 
-app = FastAPI(title="Predictive Maintenance API", version="0.2.0")
+app = FastAPI(title="Predictive Maintenance API", version="0.3.0")
 
 
 @app.get("/health")
@@ -128,3 +144,52 @@ def list_predictions(asset_id: str | None = None, limit: int = 50) -> list[Predi
     limit = max(1, min(limit, 500))
     with repository.connect(config.DB_PATH) as conn:
         return repository.list_predictions(conn, asset_id=asset_id, limit=limit)
+
+
+# ------------------------------------------ M3: knowledge search endpoint --
+
+
+class KnowledgeSearchRequest(BaseModel):
+    """Request body for POST /api/v1/knowledge/search (M3)."""
+
+    query: str = Field(min_length=1, max_length=500)
+    top_k: int = Field(default=config.RETRIEVAL_TOP_K, ge=1, le=10)
+    doc_types: list[DocType] | None = None
+    asset_model: str | None = None
+    component: str | None = None
+    include_unapproved: bool = False
+    include_superseded: bool = False
+
+
+@app.post("/api/v1/knowledge/search", response_model=RetrievalResult)
+def search_knowledge(req: KnowledgeSearchRequest) -> RetrievalResult:
+    """Filtered knowledge retrieval with citations (M3).
+
+    200 -> retrieval result; ``can_answer=false`` means the retriever refuses
+    (no approved chunk above the relevance threshold) - callers must not
+    fabricate advice.
+    422 -> invalid request body (empty query, top_k out of range, unknown
+    doc_type).
+    503 -> knowledge index missing (INDEX_MISSING) or stale relative to the
+    corpus (INDEX_STALE): run scripts/build_knowledge_index.py. The system
+    never answers from silently outdated knowledge.
+    """
+    try:
+        index = KnowledgeIndex.load_default()
+    except KnowledgeIndexMissingError as exc:
+        raise HTTPException(
+            status_code=503, detail={"error": "INDEX_MISSING", "reason": str(exc)}
+        )
+    except KnowledgeIndexStaleError as exc:
+        raise HTTPException(
+            status_code=503, detail={"error": "INDEX_STALE", "reason": str(exc)}
+        )
+    return index.search(
+        req.query,
+        top_k=req.top_k,
+        doc_types=req.doc_types,
+        asset_model=req.asset_model,
+        component=req.component,
+        include_unapproved=req.include_unapproved,
+        include_superseded=req.include_superseded,
+    )

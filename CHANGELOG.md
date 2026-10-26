@@ -2,6 +2,66 @@
 
 ## 2026-10-27
 
+### Added — Milestone 3: Maintenance Knowledge RAG
+
+- Demonstration knowledge corpus (spec §7.1's four categories): 14 synthetic
+  Markdown documents under `data/knowledge/` — P-103 equipment manuals, five
+  maintenance SOPs (including one SUPERSEDED v1.0 and one DRAFT for version
+  filtering), three historical failure cases, and a parts/BOM compatibility
+  register — each carrying the §7.2 metadata contract (document_id,
+  asset_model, component, type, version, effective_date, approval_status,
+  source_location).
+- Deterministic ingestion pipeline (`app/knowledge/ingest_docs.py`): closed
+  front-matter validation (fail fast on unknown keys / duplicate ids), then
+  section-granularity chunking (sections merge only while tiny, so SOP steps
+  keep their context per §7.2), then TF-IDF vectors persisted as
+  `knowledge_index_vectors.npy` + `knowledge_index_meta.json` — identical
+  corpora produce byte-identical artifacts, and the index embeds a corpus
+  sha256 (`scripts/build_knowledge_index.py` CLI).
+- Filtered retrieval with citations (`app/knowledge/retriever.py`): metadata
+  filters (doc_type / asset_model / component, `*` = plant-generic), default
+  scope **APPROVED and currently-effective documents only** — similarity never
+  grants operating authority; below the calibrated cosine threshold the
+  retriever returns `can_answer=false` with an explicit reason instead of
+  weakly related knowledge (spec §10.1 layer 3: refuse rather than fabricate).
+  Retrieval strategy is versioned as `tfidf-cosine-v1`: a dependency-free
+  lexical baseline (chromadb's default embedding needs a network download on
+  first use; swap-in point documented, contract unchanged).
+- `POST /api/v1/knowledge/search` (demonstration surface for the M4 agent
+  tool, same /health precedent): 200 with citation-backed results, 422 on
+  invalid bodies, **503 INDEX_MISSING / INDEX_STALE** — the system never
+  answers from a silently outdated index (`app/main.py`).
+- RAG evaluation harness per spec §7.3/§10.2 (`scripts/evaluate_rag.py` +
+  30-question `data/knowledge/eval_set.json` →
+  `data/processed/rag_evaluation.json`): Recall@5 = 1.00 (gate ≥ 0.90),
+  MRR = 0.93, version correctness = 1.00, citation validity = 1.00,
+  refusal correctness = 1.00 on the demo corpus.
+- Layer-3 RAG test suite (ingestion determinism, stale-index refusal, version
+  filtering, refusal behaviour, API states, evaluation gates); 134 tests
+  passing in total.
+
+### Changed
+
+- `KnowledgeChunk` / `Citation` / `KnowledgeHit` / `RetrievalResult` contracts
+  added to the frozen v1 schema set (closed models, §7.2 field coverage).
+- `requirements.txt` dependency policy note updated: M3 adds **no** new
+  dependencies; chromadb/embedding-model adoption is deferred pending approval.
+- README updated for the M3 workflow (index build + RAG evaluation commands,
+  knowledge search API example, roadmap status).
+
+### Fixed (found and verified during development)
+
+- Chunking initially packed every document into a single ~780-char chunk
+  (merge threshold too aggressive); replaced with section-granularity packing
+  (14 → 25 chunks) so citations point at sections instead of whole documents.
+- Chunk vectors lacked document-title terms, letting a manual's bearing
+  section outrank the vibration SOP for "轴承振动检查步骤"; document titles now
+  prefix every chunk and the SOP ranks first again.
+- Off-topic questions sharing only generic words ("报警/处理") scored 0.287 —
+  beyond any lexical guard; recorded as a known limitation (eval refusal
+  questions avoid corpus vocabulary) to be covered by M4's LLM relevance
+  check. Known limitation, not silenced.
+
 ### Added — Milestone 2: Prediction & Risk
 
 - Rule + statistical risk engine (spec §5.2 方案 A): time-window features with the

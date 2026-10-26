@@ -13,7 +13,7 @@ Contract rules (following skills/agent-tool-integration):
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -315,4 +315,108 @@ class PredictionRecord(_ClosedModel):
         if value.tzinfo is None:
             raise ValueError("timestamps must be timezone-aware (UTC expected)")
         return value.astimezone(timezone.utc)
+
+
+# ---------------------------------------------- M3: knowledge retrieval ----
+
+
+class DocType(str, Enum):
+    """Knowledge document categories (spec section 7.1)."""
+
+    MANUAL = "MANUAL"  # equipment technical manual
+    SOP = "SOP"        # maintenance standard operating procedure
+    CASE = "CASE"      # historical failure / maintenance case
+    BOM = "BOM"        # equipment BOM and parts compatibility
+
+
+class ApprovalStatus(str, Enum):
+    """Document lifecycle status (spec section 7.2 ``approval_status``).
+
+    Retrieval defaults to APPROVED documents only: a high similarity score
+    never grants operating authority (spec section 7.2).
+    """
+
+    APPROVED = "APPROVED"
+    DRAFT = "DRAFT"
+    SUPERSEDED = "SUPERSEDED"
+
+
+class KnowledgeChunk(_ClosedModel):
+    """One retrievable knowledge chunk - spec section 7.2 metadata contract.
+
+    ``asset_model`` is the concrete equipment model the chunk applies to
+    (``P-103`` in the demo) or ``*`` for plant-generic documents such as
+    the lockout/tagout SOP. ``chunk_id`` lineage:
+    ``{document_id}#c{zero-padded index}``, deterministic per corpus.
+    """
+
+    contract_version: str = CONTRACT_VERSION
+    chunk_id: str = Field(min_length=1)
+    doc_id: str = Field(min_length=1)
+    doc_type: DocType
+    doc_version: str = Field(min_length=1)
+    asset_model: str = Field(min_length=1)
+    component: str = Field(min_length=1)
+    section_title: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    effective_date: date
+    approval_status: ApprovalStatus
+    superseded_by: Optional[str] = None
+    source_location: str = Field(min_length=1)
+
+
+class Citation(_ClosedModel):
+    """Traceable reference to one knowledge chunk (spec section 7.3 引用).
+
+    M4's citation validation ("关键维修建议有有效依据") checks suggestions
+    against citations that resolve to an existing, currently approved chunk.
+    ``score`` is the lexical similarity - it is evidence of retrieval, not
+    of correctness.
+    """
+
+    chunk_id: str = Field(min_length=1)
+    doc_id: str = Field(min_length=1)
+    doc_version: str = Field(min_length=1)
+    section_title: str = Field(min_length=1)
+    source_location: str = Field(min_length=1)
+    score: float = Field(ge=0.0)
+
+
+class KnowledgeHit(_ClosedModel):
+    """One retrieval hit: the citation plus the chunk text it points to."""
+
+    citation: Citation
+    text: str = Field(min_length=1)
+
+
+class KnowledgeFilters(_ClosedModel):
+    """Metadata filters as actually applied by the retriever.
+
+    Echoed in ``RetrievalResult`` so every answer states under which
+    authorization scope it was produced.
+    """
+
+    doc_types: Optional[list[DocType]] = None
+    asset_model: Optional[str] = None
+    component: Optional[str] = None
+    include_unapproved: bool = False
+    include_superseded: bool = False
+
+
+class RetrievalResult(_ClosedModel):
+    """Result of one knowledge search (M3, spec sections 7.2/7.3).
+
+    ``can_answer=false`` means no chunk reached the relevance threshold or
+    the filters returned nothing: callers must refuse instead of fabricating
+    advice (spec section 10.1 layer 3).
+    """
+
+    contract_version: str = CONTRACT_VERSION
+    query: str = Field(min_length=1)
+    top_k: int = Field(ge=1, le=10)
+    filters: KnowledgeFilters
+    can_answer: bool
+    insufficient_reason: Optional[str] = None
+    retrieval_version: str = Field(min_length=1)
+    results: list[KnowledgeHit] = Field(default_factory=list)
 

@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from pydantic import ValidationError
 
 from app.schemas import (
     AgentAssessment,
+    ApprovalStatus,
     Asset,
+    Citation,
+    DocType,
     EvidenceItem,
+    KnowledgeChunk,
+    KnowledgeFilters,
+    KnowledgeHit,
     PredictionRecord,
+    RetrievalResult,
     RiskAssessment,
     RiskLevel,
     SensorQuality,
@@ -197,3 +204,100 @@ def test_prediction_record_rejects_unknown_fields():
             data_quality="OK",
             invented_field=True,
         )
+
+
+# ---------------------------------------------- M3: knowledge contracts ----
+
+
+def make_chunk(**overrides):
+    payload = {
+        "chunk_id": "KB-SOP-001#c000",
+        "doc_id": "KB-SOP-001",
+        "doc_type": "SOP",
+        "doc_version": "2.1",
+        "asset_model": "P-103",
+        "component": "bearing",
+        "section_title": "检查步骤",
+        "text": "1. 停机并完成安全隔离；2. 在轴承座水平/垂直方向复测振动。",
+        "effective_date": date(2026, 9, 1),
+        "approval_status": "APPROVED",
+        "source_location": "data/knowledge/KB-SOP-001-vibration-sop.md#c000",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_knowledge_chunk_accepts_valid_payload():
+    chunk = KnowledgeChunk(**make_chunk())
+    assert chunk.doc_type is DocType.SOP
+    assert chunk.approval_status is ApprovalStatus.APPROVED
+    assert chunk.superseded_by is None
+
+
+def test_knowledge_chunk_rejects_unknown_fields():
+    with pytest.raises(ValidationError):
+        KnowledgeChunk(**make_chunk(embedding=[0.1, 0.2]))
+
+
+def test_knowledge_chunk_rejects_invalid_enum():
+    with pytest.raises(ValidationError):
+        KnowledgeChunk(**make_chunk(doc_type="WIKI"))
+
+
+def test_knowledge_chunk_rejects_bad_date():
+    with pytest.raises(ValidationError):
+        KnowledgeChunk(**make_chunk(effective_date="2026-13-01"))
+
+
+def test_citation_rejects_negative_score():
+    with pytest.raises(ValidationError):
+        Citation(
+            chunk_id="KB-SOP-001#c000",
+            doc_id="KB-SOP-001",
+            doc_version="2.1",
+            section_title="检查步骤",
+            source_location="data/knowledge/KB-SOP-001-vibration-sop.md#c000",
+            score=-0.5,
+        )
+
+
+def make_retrieval_result(**overrides):
+    payload = {
+        "query": "轴承温度高怎么处理",
+        "top_k": 5,
+        "filters": KnowledgeFilters(asset_model="P-103"),
+        "can_answer": True,
+        "retrieval_version": "tfidf-cosine-v1",
+        "results": [
+            KnowledgeHit(
+                citation=Citation(
+                    chunk_id="KB-SOP-002#c000",
+                    doc_id="KB-SOP-002",
+                    doc_version="1.3",
+                    section_title="处理步骤",
+                    source_location="data/knowledge/KB-SOP-002-bearing-temp-sop.md#c000",
+                    score=0.42,
+                ),
+                text="确认轴承温度测点……",
+            )
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_retrieval_result_defaults():
+    result = RetrievalResult(**make_retrieval_result())
+    assert result.can_answer is True
+    assert result.insufficient_reason is None
+    assert result.results[0].citation.doc_id == "KB-SOP-002"
+
+
+def test_retrieval_result_rejects_unknown_fields():
+    with pytest.raises(ValidationError):
+        RetrievalResult(**make_retrieval_result(answer="编造的回答必须被契约拒绝"))
+
+
+def test_retrieval_result_top_k_bounds():
+    with pytest.raises(ValidationError):
+        RetrievalResult(**make_retrieval_result(top_k=0))

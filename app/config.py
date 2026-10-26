@@ -150,3 +150,30 @@ SUSPECT_RATIO_DEGRADED = 0.2
 
 PREDICTION_MODEL_VERSION = "rules-stat-v1"   # rule+statistical approach, not a trained model
 RISK_RULE_VERSION = "risk-rules-v1"
+
+# ------------------------------------------------- M3: knowledge RAG -------
+# Synthetic maintenance-knowledge corpus (Markdown files with front matter).
+KNOWLEDGE_DIR = Path(os.getenv("PMA_KNOWLEDGE_DIR", str(DATA_DIR / "knowledge")))
+KNOWLEDGE_INDEX_VECTORS = PROCESSED_DATA_DIR / "knowledge_index_vectors.npy"
+KNOWLEDGE_INDEX_META = PROCESSED_DATA_DIR / "knowledge_index_meta.json"
+
+# Chunking: documents are split on headings and paragraphs, sections packed
+# up to CHUNK_MAX_CHARS; a section below CHUNK_MIN_CHARS is merged forward so
+# SOP steps keep their context (spec section 7.2 forbids shredding SOPs into
+# context-free sentence fragments). 120/700 calibrated on the demo corpus:
+# typical sections are 100-250 chars, so short docs stay one chunk and long
+# manuals split at the 700-char boundary.
+CHUNK_MAX_CHARS = 700
+CHUNK_MIN_CHARS = 120
+
+# Retrieval (spec sections 7.2/7.3 and 10.1 layer 3): below RETRIEVAL_MIN_SCORE
+# cosine similarity the retriever refuses ("can_answer=false") instead of
+# serving weakly related knowledge. Calibrated on the demo corpus during
+# evaluation: on-topic queries score >= ~0.11, off-topic queries that share no
+# vocabulary with the corpus score ~0. KNOWN LIMIT (see validation.md): a
+# lexical baseline cannot refuse off-topic questions that only share generic
+# words (报警/处理/温度) with the corpus - M4's LLM relevance check must cover
+# that residual risk. EXAMPLE_RULE: recalibrate with a real corpus.
+RETRIEVAL_TOP_K = 5
+RETRIEVAL_MIN_SCORE = 0.10
+RETRIEVAL_VERSION = "tfidf-cosine-v1"   # lexical TF-IDF baseline, not semantic
