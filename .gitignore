@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment / secrets (keep outside source control per spec rule 13)
+.env
+.env.*
+
+# Generated data artifacts - reproducible from fixed seeds, do not commit
+data/raw/*.csv
+data/processed/
+*.sqlite3
+*.db
+
+# ... but keep generation manifests (they document how to regenerate data)
+!data/raw/manifest_*.json
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store

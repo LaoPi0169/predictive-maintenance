@@ -1,0 +1,20 @@
+{
+  "generator_version": "sim-v1",
+  "contract_version": "1.0",
+  "scenario": "degradation",
+  "seed": 42,
+  "periods": 4320,
+  "freq_minutes": 1,
+  "asset_id": "PUMP_001",
+  "site_id": "SITE_001",
+  "data_start": "2026-10-01T00:00:00Z",
+  "synthetic": true,
+  "note": "Simulated demonstration data. Not real measurements.",
+  "failure_time": "2026-10-03T23:59:00Z",
+  "failure_mode": "BEARING_DEGRADATION",
+  "rows": 4320,
+  "data_end": "2026-10-03T23:59:00Z",
+  "csv_file": "degradation_seed42.csv",
+  "csv_sha256": "c9213bc1c13135c2d647260f7a2ad8289fb24c87fec6ffe4b6a7c6090c118272",
+  "regenerate_cmd": "python -m app.data.simulator --scenario degradation --seed 42 --periods 4320"
+}

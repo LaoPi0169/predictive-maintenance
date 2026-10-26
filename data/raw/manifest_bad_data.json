@@ -1,0 +1,18 @@
+{
+  "generator_version": "sim-v1",
+  "contract_version": "1.0",
+  "scenario": "bad_data",
+  "seed": 42,
+  "periods": 360,
+  "freq_minutes": 1,
+  "asset_id": "PUMP_001",
+  "site_id": "SITE_001",
+  "data_start": "2026-10-01T00:00:00Z",
+  "synthetic": true,
+  "note": "Simulated demonstration data. Not real measurements.",
+  "rows": 348,
+  "data_end": "2026-10-01T05:59:00Z",
+  "csv_file": "bad_data_seed42.csv",
+  "csv_sha256": "e1fc10a6b30ff2c093b829ed5601ef61a844fce13648c311449e76fac779c3bb",
+  "regenerate_cmd": "python -m app.data.simulator --scenario bad_data --seed 42 --periods 360"
+}
