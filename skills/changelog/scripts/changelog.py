@@ -24,7 +24,7 @@ def git_log(since_date=None):
 
 def last_date_in_changelog(path):
     """Return the first ## YYYY-MM-DD heading found, or None."""
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith("## "):
             candidate = line[3:].strip()
             try:
@@ -53,7 +53,7 @@ def main():
             print("No commits found — nothing to write.")
             sys.exit(0)
         content = ["# Changelog\n"] + render_sections(by_date)
-        changelog.write_text("".join(content))
+        changelog.write_text("".join(content), encoding="utf-8")
         total = sum(len(v) for v in by_date.values())
         print(f"Created CHANGELOG.md with {total} entries across {len(by_date)} date(s).")
     else:
@@ -64,12 +64,12 @@ def main():
         if not by_date:
             print("No new commits since last entry — CHANGELOG.md is up to date.")
             sys.exit(0)
-        existing = changelog.read_text()
+        existing = changelog.read_text(encoding="utf-8")
         lines = existing.splitlines(keepends=True)
         # Insert new sections after the title line
         insert_at = 1 if lines and lines[0].startswith("# ") else 0
         updated = "".join(lines[:insert_at] + render_sections(by_date) + lines[insert_at:])
-        changelog.write_text(updated)
+        changelog.write_text(updated, encoding="utf-8")
         total = sum(len(v) for v in by_date.values())
         print(f"Added {total} new entries to CHANGELOG.md.")
 
