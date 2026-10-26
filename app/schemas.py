@@ -242,3 +242,77 @@ class AgentAssessment(_ClosedModel):
     model_version: Optional[str] = None
     uncertainty_notes: list[str] = Field(default_factory=list)
 
+
+# ------------------------------------------------- M2: risk assessment -----
+
+
+class RiskAssessment(_ClosedModel):
+    """Result of the rule+statistical risk engine (M2, spec sections 5.4/8.4).
+
+    ``risk_score`` is a configurable composite of statistical z-scores on a
+    0-10 scale - it is NOT a failure probability, so ``confidence`` stays
+    null until a calibrated model exists (contract rule, spec section 3.2).
+    The assessment describes the newest usable RUNNING-dominated window; the
+    ``horizon_hours`` field records the requested horizon but the rule-based
+    approach makes no claim about the future beyond the noted uncertainty.
+    """
+
+    contract_version: str = CONTRACT_VERSION
+    asset_id: str = Field(min_length=1)
+    generated_at: datetime
+    window_start: datetime
+    window_end: datetime
+    horizon_hours: int = Field(ge=1, le=168)
+    risk_level: RiskLevel
+    risk_score: float = Field(ge=0.0, le=10.0)
+    anomaly_score: float = Field(ge=0.0)
+    risk_rule_version: str = Field(min_length=1)
+    model_version: str = Field(min_length=1)
+    confidence: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Always null for the rule-based engine (not a calibrated probability).",
+    )
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    uncertainty_notes: list[str] = Field(default_factory=list)
+    data_quality: str = Field(
+        min_length=1,
+        description="OK | DEGRADED (INSUFFICIENT_DATA is signalled via InsufficientDataError).",
+    )
+
+    @field_validator("generated_at", "window_start", "window_end")
+    @classmethod
+    def _require_tz_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("timestamps must be timezone-aware (UTC expected)")
+        return value.astimezone(timezone.utc)
+
+
+class PredictionRecord(_ClosedModel):
+    """One ``predictions`` table row (spec section 8.2) - audit trail.
+
+    Both successful assessments and explicit failure states are persisted:
+    a missing/failed prediction must never be silently read as healthy.
+    """
+
+    asset_id: str = Field(min_length=1)
+    created_at: datetime
+    horizon_hours: int = Field(ge=1, le=168)
+    window_start: Optional[datetime] = None
+    window_end: Optional[datetime] = None
+    risk_score: Optional[float] = Field(default=None, ge=0.0, le=10.0)
+    risk_level: Optional[str] = None  # RiskLevel value or "INSUFFICIENT_DATA"
+    model_version: Optional[str] = None
+    data_quality: str = Field(min_length=1)  # OK | DEGRADED | INSUFFICIENT_DATA
+    notes: str = ""
+
+    @field_validator("created_at", "window_start", "window_end")
+    @classmethod
+    def _require_tz_aware(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("timestamps must be timezone-aware (UTC expected)")
+        return value.astimezone(timezone.utc)
+

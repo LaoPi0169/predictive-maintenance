@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Iterator, Optional, Sequence
 
 from app.database.models import init_db
-from app.schemas import Asset, SensorReading, utc_now
+from app.schemas import Asset, PredictionRecord, SensorReading, utc_now
 
 _TIMESTAMP_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -152,3 +152,78 @@ def count_readings(conn: sqlite3.Connection, asset_id: str) -> int:
         "SELECT COUNT(*) AS n FROM sensor_readings WHERE asset_id = ?", (asset_id,)
     ).fetchone()
     return int(row["n"])
+
+
+# ---------------------------------------------------------- predictions ----
+
+
+def asset_exists(conn: sqlite3.Connection, asset_id: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM assets WHERE asset_id = ?", (asset_id,)
+    ).fetchone()
+    return row is not None
+
+
+def insert_prediction(conn: sqlite3.Connection, record: PredictionRecord) -> int:
+    """Persist one prediction (success or explicit failure state)."""
+    cursor = conn.execute(
+        """
+        INSERT INTO predictions
+            (asset_id, created_at, horizon_hours, window_start, window_end,
+             risk_score, risk_level, model_version, data_quality, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record.asset_id,
+            _iso(record.created_at),
+            record.horizon_hours,
+            _iso(record.window_start) if record.window_start else None,
+            _iso(record.window_end) if record.window_end else None,
+            record.risk_score,
+            record.risk_level,
+            record.model_version,
+            record.data_quality,
+            record.notes,
+        ),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
+def list_predictions(
+    conn: sqlite3.Connection,
+    asset_id: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> list[PredictionRecord]:
+    """Prediction rows, newest first (optionally filtered by asset)."""
+    sql = "SELECT * FROM predictions"
+    params: list[object] = []
+    if asset_id is not None:
+        sql += " WHERE asset_id = ?"
+        params.append(asset_id)
+    sql += " ORDER BY prediction_id DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    rows = conn.execute(sql, params).fetchall()
+
+    def _parse(value: Optional[str]) -> Optional[datetime]:
+        if value is None:
+            return None
+        return datetime.strptime(value, _TIMESTAMP_FMT).replace(tzinfo=timezone.utc)
+
+    return [
+        PredictionRecord(
+            asset_id=row["asset_id"],
+            created_at=_parse(row["created_at"]),
+            horizon_hours=int(row["horizon_hours"]),
+            window_start=_parse(row["window_start"]),
+            window_end=_parse(row["window_end"]),
+            risk_score=row["risk_score"],
+            risk_level=row["risk_level"],
+            model_version=row["model_version"],
+            data_quality=row["data_quality"],
+            notes=row["notes"] or "",
+        )
+        for row in rows
+    ]

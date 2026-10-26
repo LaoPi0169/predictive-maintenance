@@ -10,6 +10,9 @@ from pydantic import ValidationError
 from app.schemas import (
     AgentAssessment,
     Asset,
+    EvidenceItem,
+    PredictionRecord,
+    RiskAssessment,
     RiskLevel,
     SensorQuality,
     SensorReading,
@@ -117,3 +120,80 @@ def test_agent_assessment_unknown_field_rejected():
 def test_asset_roundtrip():
     asset = Asset(asset_id="PUMP_001", site_id="SITE_001", model="P-103", criticality="A")
     assert Asset(**asset.model_dump()) == asset
+
+
+# ------------------------------------------------- M2: risk contracts -----
+
+
+def make_assessment(**overrides):
+    payload = {
+        "asset_id": "PUMP_001",
+        "generated_at": datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc),
+        "window_start": datetime(2026, 10, 3, 11, 50, tzinfo=timezone.utc),
+        "window_end": datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc),
+        "horizon_hours": 24,
+        "risk_level": RiskLevel.HIGH,
+        "risk_score": 4.2,
+        "anomaly_score": 4.2,
+        "risk_rule_version": "risk-rules-v1",
+        "model_version": "rules-stat-v1",
+        "evidence": [
+            EvidenceItem(
+                metric="vibration_mean_10m",
+                observed_value=3.6,
+                threshold_source="trailing-baseline(36w)",
+                status="z=4.20",
+            )
+        ],
+        "uncertainty_notes": ["demo note"],
+        "data_quality": "OK",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_risk_assessment_defaults_confidence_to_null():
+    assessment = RiskAssessment(**make_assessment())
+    assert assessment.confidence is None
+    assert assessment.contract_version == "1.0"
+
+
+def test_risk_assessment_rejects_unknown_fields():
+    with pytest.raises(ValidationError):
+        RiskAssessment(**make_assessment(predicted_failure_time="soon"))
+
+
+def test_risk_assessment_rejects_naive_timestamps():
+    with pytest.raises(ValidationError):
+        RiskAssessment(**make_assessment(window_end=datetime(2026, 10, 3, 12, 0)))
+
+
+def test_risk_assessment_rejects_out_of_range_score():
+    with pytest.raises(ValidationError):
+        RiskAssessment(**make_assessment(risk_score=11.0))
+
+
+def test_prediction_record_allows_failure_state():
+    record = PredictionRecord(
+        asset_id="PUMP_001",
+        created_at=datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc),
+        horizon_hours=24,
+        risk_level=None,
+        risk_score=None,
+        model_version="rules-stat-v1",
+        data_quality="INSUFFICIENT_DATA",
+        notes="too few readings",
+    )
+    assert record.risk_level is None
+    assert record.window_start is None
+
+
+def test_prediction_record_rejects_unknown_fields():
+    with pytest.raises(ValidationError):
+        PredictionRecord(
+            asset_id="PUMP_001",
+            created_at=datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc),
+            horizon_hours=24,
+            data_quality="OK",
+            invented_field=True,
+        )

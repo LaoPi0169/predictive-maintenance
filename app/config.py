@@ -70,3 +70,83 @@ SPIKE_MIN_PERIODS = 5
 # GAP_IN_TIMELINE (informational; missing data is not bad data).
 READING_INTERVAL_MINUTES = 1
 GAP_FACTOR = 3
+
+# ------------------------------------------------- M2: feature windows -----
+# EXAMPLE_RULE: time-window feature parameters (spec section 5.3). Windows are
+# left-closed [start, end). Slopes are fitted on the trailing slope window and
+# expressed in units per hour.
+FEATURE_WINDOW_MINUTES = 10
+SLOPE_WINDOW_MINUTES = 30
+# A window is only usable when it holds at least this many accepted readings
+# (10 of the expected 10 one-minute readings would be perfect; 5 is the demo
+# minimum). Windows below the minimum are skipped, never interpolated.
+MIN_READINGS_PER_WINDOW = 5
+# A window counts as "RUNNING-dominated" when at least this share of its
+# readings (and at least MIN_READINGS_PER_WINDOW of them) are RUNNING.
+RUNNING_DOMINANT_RATIO = 0.5
+
+# --------------------------------------------- M2: statistical baselines ---
+# EXAMPLE_RULE: anomaly baseline = the asset's REFERENCE period taken from
+# the START of its stored history (assumed healthy operation). Why not a
+# trailing window: for a steadily trending signal, a trailing baseline's own
+# variance grows with the trend and the z-score saturates around sqrt(3),
+# masking exactly the sustained drift this milestone must detect. A fixed
+# healthy reference makes z grow with sustained deviation, uses only PAST
+# data (no leakage, spec section 5.3) and stays stable over long runs.
+# Each metric has a std floor so tiny reference variance cannot inflate
+# z-scores into false alarms.
+ANOMALY_REFERENCE_WINDOWS = 72  # 72 x 10 min = first 12 h of usable history
+MIN_BASELINE_WINDOWS = 12       # a metric with fewer reference windows has no evidence
+ANOMALY_SCORE_CAP = 9.9         # composite score is capped for stable display
+STD_FLOOR: dict[str, float] = {
+    "vibration_mean_10m": 0.15,      # demo raw sigma; floors keep normal noise calm
+    "temperature_max_10m": 2.0,      # per-window max varies more than the mean
+    "current_mean_10m": 0.5,
+    "temperature_slope_30m": 3.0,    # degC/h; matched to measured slope noise (~1.8)
+}
+# Metrics whose z-scores feed the composite anomaly score. Order = evidence order.
+ANOMALY_METRICS: tuple[str, ...] = (
+    "vibration_mean_10m",
+    "temperature_max_10m",
+    "current_mean_10m",
+    "temperature_slope_30m",
+)
+
+# ---------------------------------------------------- M2: risk thresholds --
+# EXAMPLE_RULE: risk-level mapping (spec section 5.4). Statistical anomaly
+# thresholds and sustained sensor-alarm rules are configured SEPARATELY, as
+# the spec requires; a plant engineer must confirm all values.
+WATCH_SCORE = 2.0    # anomaly_score >= WATCH_SCORE -> WATCH
+HIGH_SCORE = 4.0     # anomaly_score >= HIGH_SCORE -> HIGH
+EMERGENCY_SCORE = 6.0
+# Sustained over-limit path: a metric above its EXAMPLE_RULES alarm level for
+# this many consecutive RUNNING-dominated windows escalates the level.
+ALARM_SUSTAINED_WINDOWS_HIGH = 2
+ALARM_SUSTAINED_WINDOWS_EMERGENCY = 3
+# Trailing temperature-rise rule (spec section 5.4 "异常趋势持续出现").
+# Floors/limits are matched to the demo sensor noise: the 30-min OLS slope of
+# bearing temperature has a noise sigma of ~1.8 degC/h (load-coupled temp
+# noise), so 6 degC/h fired false HIGHs on healthy data during evaluation.
+# The slope rule is therefore a WATCH-level helper; HIGH needs a 10 degC/h
+# sustained rise, which healthy noise does not produce.
+SLOPE_WATCH_C_PER_H = 5.0
+SLOPE_ALARM_C_PER_H = 10.0
+# Alarm metrics: mapping from feature name to the EXAMPLE_RULES alarm key.
+ALARM_LIMITS: dict[str, str] = {
+    "vibration_mean_10m": "vibration_mm_s_alarm",
+    "temperature_max_10m": "bearing_temp_c_alarm",
+    "current_mean_10m": "motor_current_a_alarm",
+}
+
+# -------------------------------------------------- M2: assessment limits --
+# EXAMPLE_RULE: minimum evidence before any assessment is produced. Below
+# these limits the system must report "cannot reliably assess" (spec sections
+# 5.4 and 8.4) instead of a fabricated healthy state.
+MIN_TOTAL_READINGS = 120          # ~2 h of one-minute data
+MIN_WINDOWS_FOR_ASSESSMENT = 6    # usable (RUNNING-dominated) windows
+MAX_STALE_WINDOW_MINUTES = 120    # newest usable window older than this -> note only
+# A window whose suspect (soft-flagged) share exceeds this is DEGRADED.
+SUSPECT_RATIO_DEGRADED = 0.2
+
+PREDICTION_MODEL_VERSION = "rules-stat-v1"   # rule+statistical approach, not a trained model
+RISK_RULE_VERSION = "risk-rules-v1"
