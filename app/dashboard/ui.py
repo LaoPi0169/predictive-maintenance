@@ -15,10 +15,19 @@ Rules of this module:
 
 from __future__ import annotations
 
-import streamlit as st
+import sys
+from pathlib import Path
 
-from app import config
-from app.dashboard.backend import (
+# `streamlit run app/dashboard/ui.py` does NOT put the project root on
+# sys.path (unlike `python -m ...`), so bootstrap it before any `app` import.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+import streamlit as st  # noqa: E402
+
+from app import config  # noqa: E402
+from app.dashboard.backend import (  # noqa: E402
     DashboardClient,
     DashboardError,
     compat_badge,
@@ -26,6 +35,7 @@ from app.dashboard.backend import (
     risk_badge,
     workorder_badge,
 )
+
 
 PAGE_TITLES = {
     "风险看板": "设备风险总览",

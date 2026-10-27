@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import threading
+from pathlib import Path
 
 import pytest
 import uvicorn
@@ -175,3 +176,19 @@ def test_ui_module_imports_without_side_effects():
     module = importlib.import_module("app.dashboard.ui")
     assert callable(module.main)
     assert set(module._PAGE_RENDERERS) == set(module.PAGE_TITLES)
+
+
+def test_ui_bootstrap_precedes_app_imports():
+    """`streamlit run` does not put the project root on sys.path, so ui.py
+    must bootstrap PROJECT_ROOT before its first `app` import — otherwise
+    the dashboard crashes with ModuleNotFoundError (M5 regression guard)."""
+    source = (
+        Path(__file__).resolve().parent.parent / "app" / "dashboard" / "ui.py"
+    ).read_text(encoding="utf-8")
+    bootstrap = source.find("sys.path.insert")
+    first_app_import = min(
+        pos for pos in (source.find("from app"), source.find("import app")) if pos != -1
+    )
+    assert bootstrap != -1, "ui.py lost the sys.path bootstrap"
+    assert bootstrap < first_app_import
+
