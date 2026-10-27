@@ -115,9 +115,11 @@ CREATE TABLE IF NOT EXISTS work_orders (
     updated_at          TEXT NOT NULL
 );
 
+-- agent_runs has NO foreign key on asset_id on purpose: failed runs for
+-- unknown assets are exactly the ones that must be auditable.
 CREATE TABLE IF NOT EXISTS agent_runs (
     run_id        TEXT PRIMARY KEY,
-    asset_id      TEXT NOT NULL REFERENCES assets(asset_id),
+    asset_id      TEXT NOT NULL,
     started_at    TEXT NOT NULL,
     finished_at   TEXT,
     status        TEXT NOT NULL,

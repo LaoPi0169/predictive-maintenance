@@ -2,6 +2,94 @@
 
 ## 2026-10-27
 
+### Added — Milestone 4: Agent & Tool Calling
+
+- **LangGraph bounded business state machine** (`app/agent/graph.py`, user-approved
+  orchestration choice, `langgraph==1.2.18`): fixed node sequence
+  `validate_asset → assess_risk → search_kb → diagnose → check_parts →
+  draft_work_order → finalize` with conditional edges encoding spec §6.1 —
+  explicitly **not** a free-form ReAct loop: the graph decides the tool order,
+  the LLM never picks tools. Unknown assets and insufficient data end in
+  explicit audited failure states; every run persists a full
+  `AgentRunResult` (status, `ToolCallTrace` list, result) to `agent_runs`.
+- **Six spec §6.3 tools** (`app/agent/tools.py`) with closed Pydantic in/out
+  contracts, `ToolSpec` metadata (name/version/effect category) and trace
+  audit on every call: `get_asset_status`, `get_prediction`,
+  `search_maintenance_kb`, `check_spare_parts`, `create_work_order_draft`
+  (write_preview), `submit_work_order` (write_execute). Spare-part verdicts
+  (CONFIRMED / PENDING / UNAVAILABLE per §9.2) come only from
+  `inventory.compatible_models` master data; UNAVAILABLE parts are skipped
+  with an explicit note and never auto-ordered.
+- **Replaceable LLM port** (`app/agent/llm.py`, spec Architecture "Optional
+  LLM provider behind a replaceable interface"): `none` (offline default,
+  explicit degradation), `scripted` (deterministic rule-based stand-in for
+  tests + offline demo — honestly labelled, not a real LLM), and
+  `openai_compatible` (stdlib urllib client, enabled only via `PMA_LLM_*`
+  env, no SDK). Two LLM duties only: knowledge **relevance check** (may only
+  downgrade `can_answer` — closing M3's generic-word refusal gap: "设备报警了
+  怎么处理" now refuses) and **diagnosis synthesis** (strictly grounded in
+  retrieved chunks; invalid JSON or grounding outside the retrieval result →
+  explicit `FAILED_DIAGNOSIS_INVALID`).
+- **Work-order lifecycle with server-side gates** (`app/workorders/service.py`):
+  creation validates business rules inline and derives the idempotency key
+  `sha256(asset|risk_event_ref|maintenance_type)` — the same risk event can
+  never produce a second work order (spec §9.3); approval checks the role
+  allowlist (`APPROVER_ROLES`) and current status; submission re-verifies the
+  persisted `APPROVED + approved_by` immediately before executing and writes
+  `SUBMITTED + external_ref=CMMS-<id>`. Model-supplied `approved: true` is
+  rejected by the closed schema; `submit_work_order` takes no approval
+  argument at all.
+- **Spec §8.3 API surfaces** (`app/main.py`): `POST /api/v1/maintenance/assess`
+  (200 completed run / 404 ASSET_NOT_FOUND / 503 CANNOT_ASSESS + audited
+  failures), `GET/POST /api/v1/work-orders` (creation returns
+  `{record, created}`; duplicate risk events replay idempotently),
+  `POST /api/v1/work-orders/{id}/approve` and `/{id}/submit` with
+  `X-Approver-Id`/`X-Approver-Role` header checks against the server-side
+  allowlist (403/404/409 error matrix). Identity never comes from request
+  bodies or model arguments.
+- **Agent scenario evaluation** (`scripts/evaluate_agent.py` +
+  `data/knowledge/agent_eval_scenarios.json` manifest →
+  `data/processed/agent_evaluation.json`): 11 deterministic scenarios —
+  high-risk draft, healthy no-draft, unknown asset, insufficient data,
+  generic-word relevance refusal, idempotent re-run, prompt injection in the
+  knowledge corpus (zero effect), LLM-unavailable degradation, parts
+  three-state, unauthorized approver, unapproved submit block. Gates:
+  scenario pass rate **1.00** (11/11), duplicate work orders **0**,
+  unauthorized submits **0**, citation validity **1.00** (structural check
+  against approved current chunks).
+- Layer-4 agent/tool test suite (contracts, LLM port, work-order service,
+  tools, graph, APIs, evaluation); **212 tests passing in total** (M1–M3
+  baseline 134 + 78 new).
+
+### Changed
+
+- `requirements.txt`: adds the user-approved `langgraph==1.2.18` (pulls
+  langchain-core transitively; no LLM SDK — the provider stays behind the
+  in-house port).
+- `agent_runs.asset_id` no longer carries a foreign key: failed runs for
+  unknown assets are exactly the ones that must be auditable.
+- `KnowledgeIndex` exposes a read-only `chunks` view (used by the agent
+  evaluation's citation-validity check); M3 retrieval behaviour unchanged.
+- README updated for the M4 workflow (assess + work-order API examples,
+  agent evaluation command, directory tree, roadmap status, scripted-LLM
+  honesty note).
+
+### Fixed (found and verified during development)
+
+- The scripted diagnosis rule initially keyed on evidence `status` values
+  that M2 never produces (`ABOVE_CONFIGURED_LIMIT`); real M2 evidence carries
+  free-text statuses (`z=2.31 (...)`, `over limit for N window(s)`, slope
+  notes). Rewritten to parse the actual statuses against the configured
+  WATCH/alarm thresholds — healthy windows now yield no fabricated failure
+  modes.
+- `workorder` row mapping referenced a non-existent module-level datetime
+  parser (nested inside `list_predictions`); added `_parse_timestamp` so
+  work-order reads round-trip correctly.
+- LangGraph `finalize` hit a `NameError` on the no-draft branch (missing
+  `WorkOrderStatus` import) — caught by the healthy-asset test.
+
+## 2026-10-27
+
 ### Added — Milestone 3: Maintenance Knowledge RAG
 
 - Demonstration knowledge corpus (spec §7.1's four categories): 14 synthetic

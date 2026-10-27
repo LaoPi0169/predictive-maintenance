@@ -3,12 +3,14 @@
 设备预测性维护 AI Agent 的 MVP 实现。总体方案见 [`spec/Project.md`](spec/Project.md)；
 功能规格遵循 `skills/rag-feature-spec` 的约定，按里程碑逐步交付。
 
-> **当前状态：M3 — 维修知识 RAG（knowledge RAG）**
+> **当前状态：M4 — Agent 与工具调用（Agent & Tool Calling）**
 > 已交付：M1 数据地基（契约、合成数据、质量门禁、SQLite）+ M2 规则统计风险引擎
 > （时间窗特征、异常检测、四级风险、预测 API、基线评测：检出率 1.0、提前量 ≈48h、健康场景 0 误报）
 > + M3 知识检索（14 份演示语料入库、元数据过滤、带引用检索、评测集：Recall@5 = 1.0、
-> 引用有效率 / 版本正确率 / 拒绝正确率 = 1.0）。
-> 未交付：Agent 与工具调用（M4）、看板（M5）。
+> 引用有效率 / 版本正确率 / 拒绝正确率 = 1.0）
+> + M4 Agent（LangGraph 有界状态机、spec §6.3 六工具、LLM 相关性复核、备件三态、
+> 幂等工单、服务端审批门禁、注入防护；11 场景评测全过：幂等重复 0、越权提交 0、引用有效率 1.0）。
+> 未交付：看板（M5）、5 层测试体系收口与试点计划（M6）。
 
 ## 业务场景（MVP）
 
@@ -18,7 +20,10 @@
 ## 技术栈
 
 Python 3.11+（开发环境 3.13） · FastAPI · Pydantic v2 · Pandas · NumPy · SQLite · pytest
-（M3 检索为**无新增依赖**的词法 TF-IDF 基线；chromadb/嵌入模型待审批后再引入）
+· LangGraph 1.2（Agent 编排，用户 2026-10-26 选定；传递引入 langchain-core）
+（M3 检索为**无新增依赖**的词法 TF-IDF 基线；chromadb/嵌入模型待审批后再引入。
+LLM 通过可替换端口接入：默认 `none`（离线降级），测试与演示用 `scripted` 确定性替代，
+真实 OpenAI 兼容端点由 `PMA_LLM_*` 环境变量启用，不引入 SDK。）
 
 ## 快速开始（Windows PowerShell）
 
@@ -35,6 +40,10 @@ python -m venv .venv
 
 # 运行检索评测（Recall@5 / MRR / 版本正确率 / 引用有效率 / 拒绝正确率）
 .venv\Scripts\python scripts\evaluate_rag.py
+
+# 运行 Agent 场景评测（11 个确定性场景：出单/拒绝/幂等/注入/越权等，报告写入 data/processed/）
+.venv\Scripts\python scripts\evaluate_agent.py
+
 
 # 运行基线评测（多 seed 退化检出率 / 提前量 / 误报，报告写入 data/processed/）
 .venv\Scripts\python scripts\evaluate_baseline.py
@@ -75,15 +84,50 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/knowledge/searc
 source_location / score）与命中原文。无可靠依据时 `can_answer=false` 且不返回引用——
 **拒绝猜测**。索引缺失或语料变更后未重建索引时返回 503（`INDEX_MISSING` /
 `INDEX_STALE`），绝不悄悄用旧知识回答。DRAFT 与 SUPERSEDED 文档默认不可见
-（相似度不等于操作授权）。该端点是演示面；M4 Agent 将以库方式调用同一检索器。
+（相似度不等于操作授权）。该端点是演示面；M4 Agent 以**库方式**调用同一检索器（不经 HTTP）。
+
+## Agent 与工单 API（M4）
+
+```powershell
+# 一键评估：状态 → 预测 → 知识检索（+LLM 相关性复核）→ 诊断 → 备件核对 → 生成待审核工单
+$body = '{"asset_id":"PUMP_001","horizon_hours":24}'
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/maintenance/assess `
+    -ContentType "application/json; charset=utf-8" -Body $body
+
+# 查询工单（?asset_id=&status= 过滤）
+Invoke-RestMethod -Uri http://127.0.0.1:8000/api/v1/work-orders
+
+# 审批（服务端校验角色白名单：X-Approver-Id / X-Approver-Role 头；body 只含决定）
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/work-orders/WO-000001/approve `
+    -Headers @{ "X-Approver-Id"="engineer-7"; "X-Approver-Role"="MAINTENANCE_ENGINEER" } `
+    -ContentType "application/json; charset=utf-8" -Body '{"decision":"APPROVE"}'
+
+# 提交（仅 APPROVED 状态可提交；服务端复核审批记录，重复提交幂等）
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/work-orders/WO-000001/submit
+```
+
+要点：编排是 **LangGraph 有界业务状态机**（不是自由 ReAct），工具顺序由图结构决定；
+LLM 只做知识相关性复核与诊断综合，无权选择工具、无权审批——`submit_work_order`
+不接收任何审批参数，服务端复核 `APPROVED + approved_by` 后才执行。同一风险事件
+（资产 + 数据窗口 + 维护类型）重复评估幂等复用同一工单。LLM 未配置（默认 `none`）
+时显式降级：不做诊断综合、动作退化为通用现场检查并留痕说明，绝不虚构故障模式；
+知识索引缺失同样显式降级。每次运行落盘 `agent_runs`（状态、工具轨迹、结果）。
+
 
 ## 项目结构
 
 ```
 app/
-├── main.py            # FastAPI 入口（/health、/assets、POST /predictions、POST /knowledge/search）
-├── config.py          # 配置与示例阈值（EXAMPLE_RULE，需设备工程师确认）
-├── schemas.py         # 冻结的 v1 数据契约（传感器数据 / 质量报告 / 风险评估 / 知识检索 / Agent 输出）
+├── main.py            # FastAPI 入口（/health、/assets、POST /predictions、POST /knowledge/search、POST /maintenance/assess、/work-orders 及审批/提交）
+├── config.py          # 配置与示例阈值（EXAMPLE_RULE，需设备工程师确认；含 LLM provider 与审批白名单）
+├── schemas.py         # 冻结的 v1 数据契约（传感器 / 质量报告 / 风险评估 / 知识检索 / 工具与工单 / Agent 运行记录）
+├── agent/
+│   ├── llm.py         # 可替换 LLM 端口：none / scripted（确定性替代）/ openai_compatible（stdlib）
+│   ├── tools.py       # spec §6.3 六工具：闭式契约 + ToolSpec + 轨迹审计 + 服务端信任边界
+│   ├── graph.py       # LangGraph 有界状态机：状态→预测→知识→诊断→备件→工单，条件边与显式失败态
+│   └── runner.py      # 运行装配与 agent_runs 落盘
+├── workorders/
+│   └── service.py     # 工单生命周期：幂等创建、角色白名单审批、提交前服务端复核
 ├── data/
 │   ├── simulator.py   # 确定性合成数据：normal / degradation / bad_data 场景
 │   ├── ingestion.py   # 数据质量门禁：校验、标记、隔离（坏数据绝不静默视为健康）
@@ -95,17 +139,18 @@ app/
 │   ├── ingest_docs.py # 文档入库：元数据校验 → 结构分块 → TF-IDF 索引（确定性、幂等）
 │   └── retriever.py   # 检索：元数据过滤（默认仅 APPROVED 现行版）+ 余弦 + 阈值拒绝
 ├── database/
-│   ├── models.py      # SQLite 表结构（spec §8.2 的 8 张核心表）
-│   └── repository.py  # 数据访问（assets / sensor_readings / predictions）
+│   ├── models.py      # SQLite 表结构（spec §8.2 的 8 张核心表；work_orders 幂等键唯一）
+│   └── repository.py  # 数据访问（assets / sensor_readings / predictions / inventory / work_orders / agent_runs）
 data/
 ├── raw/               # 合成原始数据 CSV + 生成 manifest（含 SHA-256）
-├── knowledge/         # 演示知识库语料（14 份合成 Markdown，覆盖手册/SOP/案例/BOM）+ 评测集
-└── processed/         # 校验后数据、隔离区、质量报告、模型与检索评测报告、知识索引
+├── knowledge/         # 演示知识库语料（14 份合成 Markdown，覆盖手册/SOP/案例/BOM）+ RAG 评测集 + Agent 场景清单
+└── processed/         # 校验后数据、隔离区、质量报告、模型/检索/Agent 评测报告、知识索引
 scripts/
 ├── seed_demo.py           # 一键演示数据入库
 ├── build_knowledge_index.py  # 知识索引构建 CLI
 ├── evaluate_baseline.py   # 基线评测：检出率 / 提前量 / 误报（spec §10.2 指标）
-└── evaluate_rag.py        # 检索评测：Recall@5 / MRR / 引用 / 版本 / 拒绝（spec §7.3/§10.2）
+├── evaluate_rag.py        # 检索评测：Recall@5 / MRR / 引用 / 版本 / 拒绝（spec §7.3/§10.2）
+└── evaluate_agent.py      # Agent 场景评测：出单/拒绝/幂等/注入/越权等 11 场景（skills/rag-evaluation §6）
 tests/                 # 单元与集成测试（数据质量 + 模型 + RAG 三层测试体系）
 specs/                 # 各里程碑的 feature 规格（requirements/plan/validation）
 spec/Project.md        # 项目总方案（唯一事实来源）
@@ -118,8 +163,8 @@ skills/                # 工作流 skills（规格、工具集成、评测、cha
 |---|---|---|
 | M1 数据地基 | 数据契约、合成数据、校验、SQLite | ✅ |
 | M2 预测与风险 | 时间窗口特征、异常检测、风险规则、预测 API | ✅ |
-| M3 维修知识 RAG | 文档入库、元数据过滤、带引用检索、评测集 | ✅ 当前 |
-| M4 Agent 与工具 | 6 个工具、状态机、服务端审批、幂等 | ⬜ |
+| M3 维修知识 RAG | 文档入库、元数据过滤、带引用检索、评测集 | ✅ |
+| M4 Agent 与工具 | 6 个工具、LangGraph 状态机、LLM 相关性复核、服务端审批、幂等 | ✅ 当前 |
 | M5 前端集成 | Streamlit 看板、端到端联调 | ⬜ |
 | M6 测试与验收 | 5 层测试体系、评测报告、试点计划 | ⬜ |
 
@@ -127,4 +172,7 @@ skills/                # 工作流 skills（规格、工具集成、评测、cha
 
 - 所有传感器数值均为**确定性模拟数据**，仅用于演示与测试，不代表任何真实工厂测量值。
 - `config.py` 中的阈值均标记为 `EXAMPLE_RULE` 占位值，**必须经设备工程师确认后**才能用于真实设备。
-- 工单提交必须经过服务端审批校验（M4 实现）；Agent 不直接控制任何设备。
+- 工单提交经服务端审批校验（角色白名单 + 状态机复核，M4 已实现并有测试证明）；
+  审批身份为演示级声明式请求头，真实认证属生产加固（spec §8.2）。Agent 不直接控制任何设备。
+- M4 的 `scripted` LLM 是**确定性规则替代实现，不是真实大模型**：评测证明的是编排、
+  契约与安全门禁的正确性；真实供应商经 `PMA_LLM_*` 环境变量接入后须重跑同套评测。

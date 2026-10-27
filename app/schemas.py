@@ -420,3 +420,208 @@ class RetrievalResult(_ClosedModel):
     retrieval_version: str = Field(min_length=1)
     results: list[KnowledgeHit] = Field(default_factory=list)
 
+
+# ------------------------------------------------- M4: agent & work orders --
+
+# Compatibility status vocabulary for PartRequirement (spec section 9.2 三态).
+COMPAT_CONFIRMED = "CONFIRMED"      # BOM + compatibility verified against master data
+COMPAT_PENDING = "PENDING"          # candidate without reliable compatibility evidence
+COMPAT_UNAVAILABLE = "UNAVAILABLE"  # no stock, discontinued, incompatible, unverifiable
+
+
+class EffectCategory(str, Enum):
+    """Tool effect categories (skills/agent-tool-integration section 2)."""
+
+    READ_ONLY = "read_only"
+    WRITE_PREVIEW = "write_preview"
+    WRITE_EXECUTE = "write_execute"
+
+
+class ToolCallTrace(_ClosedModel):
+    """One tool invocation in the ``agent_runs.tool_trace`` audit record.
+
+    Records status/versions/timing only - never raw model output, secrets or
+    full payloads (redaction rule, skill section 7).
+    """
+
+    tool: str = Field(min_length=1)
+    tool_version: str = Field(min_length=1)
+    effect_category: EffectCategory
+    status: str = Field(min_length=1)  # "ok" | "error"
+    duration_ms: float = Field(ge=0.0)
+    error_code: Optional[str] = None
+
+
+class RelevanceVerdict(_ClosedModel):
+    """LLM relevance check on retrieved knowledge (M4, covers the M3
+    generic-word refusal gap). Guardrail: it may only DOWNGRADE a lexical
+    ``can_answer=true`` to a refusal - never upgrade a refusal."""
+
+    checked: bool = Field(description="False when the provider is none/unavailable.")
+    relevant: bool = Field(default=False)
+    reason: str = ""
+    checker_version: str = Field(min_length=1)
+
+
+class DiagnosisDraft(_ClosedModel):
+    """Diagnosis synthesis output (LLM or deterministic fallback).
+
+    ``recommended_actions`` must be grounded: ``grounding_chunk_ids`` lists
+    the citations the actions were derived from; an empty grounding list is
+    only allowed together with explicitly generic fallback actions.
+    """
+
+    synthesizer_version: str = Field(min_length=1)
+    failure_mode_candidates: list[FailureModeCandidate] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+    grounding_chunk_ids: list[str] = Field(default_factory=list)
+    generic_fallback: bool = Field(
+        default=False,
+        description="True when no knowledge evidence supported the synthesis.",
+    )
+
+
+class KbSearchToolResult(_ClosedModel):
+    """``search_maintenance_kb`` tool output: M3 retrieval contract unchanged
+    plus the M4 relevance verdict."""
+
+    retrieval: RetrievalResult
+    relevance: RelevanceVerdict
+
+    @property
+    def effective_can_answer(self) -> bool:
+        """Lexical verdict AND relevance check (when it ran)."""
+        if not self.retrieval.can_answer:
+            return False
+        if not self.relevance.checked:
+            return True
+        return self.relevance.relevant
+
+
+class AssetStatusSnapshot(_ClosedModel):
+    """``get_asset_status`` tool output (spec section 6.3, read-only)."""
+
+    asset: Asset
+    latest_reading: Optional[SensorReading] = None
+    total_readings: int = Field(ge=0)
+    data_quality: str = Field(min_length=1)  # OK | DEGRADED | NO_DATA
+    notes: list[str] = Field(default_factory=list)
+
+
+class SparePartCheck(_ClosedModel):
+    """One part compatibility/stock result (spec section 9.2).
+
+    Compatibility is decided ONLY by inventory master data
+    (``inventory.compatible_models``) - never by model experience.
+    """
+
+    part_id: Optional[str] = None
+    part_name: str = Field(min_length=1)
+    compatible: bool
+    available_qty: int = Field(ge=0)
+    lead_time_days: Optional[int] = Field(default=None, ge=0)
+    compatibility_status: str = Field(min_length=1)  # CONFIRMED | PENDING | UNAVAILABLE
+    basis: str = Field(min_length=1, description="Master-data evidence for the verdict.")
+
+
+class WorkOrderDraftInput(_ClosedModel):
+    """Input for ``create_work_order_draft`` (spec section 6.3, write_preview).
+
+    Deliberately EXCLUDES identity/approval fields: ``created_by`` is derived
+    server-side and approval lives in the work-order lifecycle, so a model
+    can never claim either (skills/agent-tool-integration section 3).
+    """
+
+    asset_id: str = Field(min_length=1)
+    maintenance_type: str = Field(min_length=1)  # e.g. "状态检修"
+    problem_description: str = Field(min_length=1)
+    recommended_tasks: list[str] = Field(min_length=1)
+    parts_requirements: list[PartRequirement] = Field(default_factory=list)
+    risk_event_ref: str = Field(
+        min_length=1,
+        description="Reference to the risk evidence, e.g. 'window:<start>/<end>'.",
+    )
+    priority: str = "NORMAL"
+    idempotency_key: Optional[str] = Field(
+        default=None,
+        description="Optional client-supplied key; otherwise derived server-side.",
+    )
+
+
+class WorkOrderRecord(_ClosedModel):
+    """One ``work_orders`` row (spec section 8.2) - the durable source of
+    truth for the draft/approval/submit lifecycle (spec section 9.3)."""
+
+    work_order_id: str = Field(min_length=1)
+    asset_id: str = Field(min_length=1)
+    status: WorkOrderStatus
+    priority: Optional[str] = None
+    maintenance_type: Optional[str] = None
+    problem_description: Optional[str] = None
+    recommended_tasks: list[str] = Field(default_factory=list)
+    parts_requirements: list[PartRequirement] = Field(default_factory=list)
+    risk_event_ref: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    created_by: Optional[str] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    submitted_at: Optional[datetime] = None
+    external_ref: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("approved_at", "submitted_at", "created_at", "updated_at")
+    @classmethod
+    def _require_tz_aware(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("timestamps must be timezone-aware (UTC expected)")
+        return value.astimezone(timezone.utc)
+
+
+class ApprovalAction(str, Enum):
+    APPROVE = "APPROVE"
+    REJECT = "REJECT"
+
+
+class ApprovalDecision(_ClosedModel):
+    """Human approval on a pending work order. The approver identity comes
+    from the authenticated session/headers (server-side), NOT from this body
+    and never from model-generated arguments (spec section 6.3)."""
+
+    decision: ApprovalAction
+    comment: str = ""
+
+
+class AgentRunStatus(str, Enum):
+    COMPLETED = "COMPLETED"
+    FAILED_ASSET_NOT_FOUND = "FAILED_ASSET_NOT_FOUND"
+    FAILED_CANNOT_ASSESS = "FAILED_CANNOT_ASSESS"
+    FAILED_KB_UNAVAILABLE = "FAILED_KB_UNAVAILABLE"
+    FAILED_LLM_UNAVAILABLE = "FAILED_LLM_UNAVAILABLE"
+    FAILED_DIAGNOSIS_INVALID = "FAILED_DIAGNOSIS_INVALID"
+    FAILED_TOOL_ERROR = "FAILED_TOOL_ERROR"
+
+
+class AgentRunResult(_ClosedModel):
+    """Complete outcome of one agent run, persisted to ``agent_runs``."""
+
+    contract_version: str = CONTRACT_VERSION
+    run_id: str = Field(min_length=1)
+    asset_id: str = Field(min_length=1)
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    status: AgentRunStatus
+    tool_trace: list[ToolCallTrace] = Field(default_factory=list)
+    model_provider: str = Field(min_length=1)
+    assessment: Optional[AgentAssessment] = None
+    failure_reason: Optional[str] = None
+
+    @field_validator("started_at")
+    @classmethod
+    def _require_tz_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("timestamps must be timezone-aware (UTC expected)")
+        return value.astimezone(timezone.utc)
+

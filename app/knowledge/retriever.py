@@ -70,6 +70,11 @@ class KnowledgeIndex:
         self.retrieval_version = meta["retrieval_version"]
         self.corpus_hash = meta["corpus_hash"]
 
+    @property
+    def chunks(self) -> list[KnowledgeChunk]:
+        """Read-only view of the indexed chunks (contract-validated)."""
+        return list(self._chunks)
+
     @classmethod
     def load(cls, vectors_path: Path | str, meta_path: Path | str, knowledge_dir: Path | str) -> "KnowledgeIndex":
         vectors_file, meta_file = Path(vectors_path), Path(meta_path)

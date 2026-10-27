@@ -301,3 +301,177 @@ def test_retrieval_result_rejects_unknown_fields():
 def test_retrieval_result_top_k_bounds():
     with pytest.raises(ValidationError):
         RetrievalResult(**make_retrieval_result(top_k=0))
+
+
+# -------------------------------------------- M4: agent & work-order contracts
+
+from app.schemas import (  # noqa: E402
+    AgentRunResult,
+    AgentRunStatus,
+    ApprovalAction,
+    ApprovalDecision,
+    AssetStatusSnapshot,
+    COMPAT_CONFIRMED,
+    COMPAT_PENDING,
+    COMPAT_UNAVAILABLE,
+    EffectCategory,
+    KbSearchToolResult,
+    PartRequirement,
+    RelevanceVerdict,
+    SparePartCheck,
+    ToolCallTrace,
+    WorkOrderDraftInput,
+    WorkOrderRecord,
+)
+
+
+def make_work_order_record(**overrides):
+    payload = {
+        "work_order_id": "WO-0001",
+        "asset_id": "PUMP_001",
+        "status": "PENDING_APPROVAL",
+        "priority": "NORMAL",
+        "maintenance_type": "状态检修",
+        "problem_description": "振动趋势异常，轴承温度持续上升",
+        "recommended_tasks": ["按已批准 SOP 复测振动"],
+        "parts_requirements": [
+            PartRequirement(
+                part_name="轴承 6208-2RS",
+                compatibility_status="CONFIRMED",
+                quantity=1,
+            )
+        ],
+        "risk_event_ref": "window:2026-10-01T00:00:00Z/2026-10-01T01:00:00Z",
+        "created_by": "agent",
+        "created_at": datetime(2026, 10, 26, 10, 0, tzinfo=timezone.utc),
+        "updated_at": datetime(2026, 10, 26, 10, 0, tzinfo=timezone.utc),
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_work_order_draft_rejects_model_supplied_approval():
+    """A model writing ``approved: true`` into tool arguments must be rejected
+    by the closed schema (spec section 6.3 trust boundary)."""
+    with pytest.raises(ValidationError):
+        WorkOrderDraftInput(
+            asset_id="PUMP_001",
+            maintenance_type="状态检修",
+            problem_description="振动异常",
+            recommended_tasks=["复测振动"],
+            risk_event_ref="window:x/y",
+            approved=True,
+        )
+
+
+def test_work_order_draft_rejects_empty_tasks():
+    with pytest.raises(ValidationError):
+        WorkOrderDraftInput(
+            asset_id="PUMP_001",
+            maintenance_type="状态检修",
+            problem_description="振动异常",
+            recommended_tasks=[],
+            risk_event_ref="window:x/y",
+        )
+
+
+def test_work_order_record_accepts_valid_payload():
+    record = WorkOrderRecord(**make_work_order_record())
+    assert record.status is WorkOrderStatus.PENDING_APPROVAL
+    assert record.approved_by is None
+    assert record.parts_requirements[0].compatibility_status == "CONFIRMED"
+
+
+def test_work_order_record_rejects_naive_timestamp():
+    with pytest.raises(ValidationError):
+        WorkOrderRecord(
+            **make_work_order_record(
+                approved_at=datetime(2026, 10, 26, 11, 0)  # naive
+            )
+        )
+
+
+def test_approval_decision_enum():
+    decision = ApprovalDecision(decision="APPROVE", comment="同意")
+    assert decision.decision is ApprovalAction.APPROVE
+    with pytest.raises(ValidationError):
+        ApprovalDecision(decision="MAYBE")
+
+
+def test_tool_call_trace_rejects_negative_duration():
+    with pytest.raises(ValidationError):
+        ToolCallTrace(
+            tool="get_asset_status",
+            tool_version="agent-tools-v1",
+            effect_category=EffectCategory.READ_ONLY,
+            status="ok",
+            duration_ms=-1.0,
+        )
+
+
+def test_relevance_verdict_shape():
+    verdict = RelevanceVerdict(checked=True, relevant=False, reason="泛化词", checker_version="v1")
+    assert verdict.relevant is False
+    with pytest.raises(ValidationError):
+        RelevanceVerdict(checked=True, relevant=False, reason="泛化词", checker_version="v1", invented=True)
+
+
+def test_kb_search_effective_can_answer_only_downgrades():
+    retrieval = make_retrieval_result()
+    hit_ok = KbSearchToolResult(
+        retrieval=RetrievalResult(**retrieval),
+        relevance=RelevanceVerdict(checked=True, relevant=True, reason="域内", checker_version="v1"),
+    )
+    assert hit_ok.effective_can_answer is True
+
+    hit_refused = KbSearchToolResult(
+        retrieval=RetrievalResult(**retrieval),
+        relevance=RelevanceVerdict(checked=True, relevant=False, reason="泛化词命中", checker_version="v1"),
+    )
+    assert hit_refused.effective_can_answer is False
+
+    unchecked = KbSearchToolResult(
+        retrieval=RetrievalResult(**retrieval),
+        relevance=RelevanceVerdict(checked=False, checker_version="v1"),
+    )
+    assert unchecked.effective_can_answer is True
+
+    lexical_refusal = KbSearchToolResult(
+        retrieval=RetrievalResult(
+            **make_retrieval_result(can_answer=False, insufficient_reason="below threshold", results=[])
+        ),
+        relevance=RelevanceVerdict(checked=True, relevant=True, reason="域内", checker_version="v1"),
+    )
+    assert lexical_refusal.effective_can_answer is False
+
+
+def test_spare_part_check_status_vocabulary():
+    check = SparePartCheck(
+        part_id="CPK-6208",
+        part_name="轴承 6208-2RS",
+        compatible=True,
+        available_qty=3,
+        lead_time_days=2,
+        compatibility_status=COMPAT_CONFIRMED,
+        basis="inventory.compatible_models contains P-103",
+    )
+    assert check.compatibility_status == "CONFIRMED"
+    assert {COMPAT_CONFIRMED, COMPAT_PENDING, COMPAT_UNAVAILABLE} == {
+        "CONFIRMED",
+        "PENDING",
+        "UNAVAILABLE",
+    }
+
+
+def test_agent_run_result_defaults():
+    result = AgentRunResult(
+        run_id="run-1",
+        asset_id="PUMP_001",
+        started_at=datetime(2026, 10, 26, 10, 0, tzinfo=timezone.utc),
+        status=AgentRunStatus.COMPLETED,
+        model_provider="scripted",
+    )
+    assert result.tool_trace == []
+    assert result.assessment is None
+    assert result.failure_reason is None
+

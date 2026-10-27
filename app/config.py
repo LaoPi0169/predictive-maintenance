@@ -177,3 +177,33 @@ CHUNK_MIN_CHARS = 120
 RETRIEVAL_TOP_K = 5
 RETRIEVAL_MIN_SCORE = 0.10
 RETRIEVAL_VERSION = "tfidf-cosine-v1"   # lexical TF-IDF baseline, not semantic
+
+# --------------------------------------------------- M4: agent & tools -----
+# Tool version stamp (bump when tool contracts change).
+AGENT_TOOL_VERSION = "agent-tools-v1"
+
+# EXAMPLE_RULE: risk levels that justify a work-order draft (spec section 6.4
+# step 6: draft only when the risk is actionable). WATCH/NORMAL runs produce
+# an assessment without a work order. Engineer must confirm.
+AGENT_ACTIONABLE_RISK_LEVELS = ("HIGH", "EMERGENCY")
+
+# Work-order identifiers and the simulated CMMS reference (spec section 9.3:
+# the external system is a mock in the MVP; external_ref = CMMS-<id>).
+WORK_ORDER_ID_PREFIX = "WO-"
+
+# EXAMPLE_RULE: roles allowed to approve work orders. Demo-grade declared
+# identity (X-Approver-Id/X-Approver-Role headers); real authentication is
+# deferred to production hardening (spec section 8.2 notes).
+APPROVER_ROLES = ("MAINTENANCE_ENGINEER", "OPERATIONS_MANAGER")
+
+# Replaceable LLM provider (spec Architecture: "Optional LLM provider behind a
+# replaceable interface"). none = offline default (explicit degradation, no
+# diagnosis synthesis); scripted = deterministic stand-in implementing the
+# same contract (tests + offline demo; NOT a real LLM); openai_compatible =
+# stdlib client for any OpenAI-compatible endpoint, enabled only via env.
+LLM_PROVIDER = os.getenv("PMA_LLM_PROVIDER", "none")
+LLM_BASE_URL = os.getenv("PMA_LLM_BASE_URL", "")
+LLM_API_KEY = os.getenv("PMA_LLM_API_KEY", "")
+LLM_MODEL = os.getenv("PMA_LLM_MODEL", "")
+LLM_TIMEOUT_S = float(os.getenv("PMA_LLM_TIMEOUT_S", "20"))
+

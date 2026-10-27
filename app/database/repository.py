@@ -1,4 +1,4 @@
-"""Data access layer for the MVP storage.
+﻿"""Data access layer for the MVP storage.
 
 M1 scope: assets and sensor readings. The remaining tables are created by
 the schema and will get repositories in M2-M4. Timestamps are stored as
@@ -8,14 +8,25 @@ order. ``insert_readings`` is idempotent via UNIQUE(asset_id, ts).
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional, Sequence
 
+from app import config
 from app.database.models import init_db
-from app.schemas import Asset, PredictionRecord, SensorReading, utc_now
+from app.schemas import (
+    AgentRunResult,
+    Asset,
+    PartRequirement,
+    PredictionRecord,
+    SensorReading,
+    WorkOrderRecord,
+    WorkOrderStatus,
+    utc_now,
+)
 
 _TIMESTAMP_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -25,6 +36,13 @@ def _iso(moment: datetime) -> str:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(timezone.utc).strftime(_TIMESTAMP_FMT)
+
+
+def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
+    """Parse a stored ISO-8601 UTC Zulu string back to a tz-aware datetime."""
+    if value is None:
+        return None
+    return datetime.strptime(value, _TIMESTAMP_FMT).replace(tzinfo=timezone.utc)
 
 
 @contextmanager
@@ -215,7 +233,7 @@ def list_predictions(
     return [
         PredictionRecord(
             asset_id=row["asset_id"],
-            created_at=_parse(row["created_at"]),
+            created_at=_parse_timestamp(row["created_at"]),
             horizon_hours=int(row["horizon_hours"]),
             window_start=_parse(row["window_start"]),
             window_end=_parse(row["window_end"]),
@@ -226,4 +244,220 @@ def list_predictions(
             notes=row["notes"] or "",
         )
         for row in rows
+    ]
+
+
+# ------------------------------------------------------------- inventory ----
+
+
+def list_inventory(conn: sqlite3.Connection, active_only: bool = True) -> list[dict]:
+    """Inventory master data rows (spec section 8.2 ``inventory``)."""
+    sql = "SELECT part_id, part_name, compatible_models, available_qty, lead_time_days, status FROM inventory"
+    if active_only:
+        sql += " WHERE status = 'ACTIVE'"
+    sql += " ORDER BY part_id"
+    return [dict(row) for row in conn.execute(sql)]
+
+
+# ---------------------------------------------------------- work orders ----
+
+
+def _row_to_work_order(row: sqlite3.Row) -> WorkOrderRecord:
+    tasks = json.loads(row["recommended_tasks"]) if row["recommended_tasks"] else []
+    parts = json.loads(row["parts_requirements"]) if row["parts_requirements"] else []
+    return WorkOrderRecord(
+        work_order_id=row["work_order_id"],
+        asset_id=row["asset_id"],
+        status=WorkOrderStatus(row["status"]),
+        priority=row["priority"],
+        maintenance_type=row["maintenance_type"],
+        problem_description=row["problem_description"],
+        recommended_tasks=[str(task) for task in tasks],
+        parts_requirements=[PartRequirement(**part) for part in parts],
+        risk_event_ref=row["risk_event_ref"],
+        idempotency_key=row["idempotency_key"],
+        created_by=row["created_by"],
+        approved_by=row["approved_by"],
+        approved_at=_parse_timestamp(row["approved_at"]),
+        submitted_at=_parse_timestamp(row["submitted_at"]),
+        external_ref=row["external_ref"],
+        created_at=_parse_timestamp(row["created_at"]),
+        updated_at=_parse_timestamp(row["updated_at"]),
+    )
+
+
+def insert_work_order(conn: sqlite3.Connection, record: WorkOrderRecord) -> None:
+    conn.execute(
+        """
+        INSERT INTO work_orders
+            (work_order_id, asset_id, status, priority, maintenance_type,
+             problem_description, recommended_tasks, parts_requirements,
+             risk_event_ref, idempotency_key, created_by, approved_by,
+             approved_at, submitted_at, external_ref, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record.work_order_id,
+            record.asset_id,
+            record.status.value,
+            record.priority,
+            record.maintenance_type,
+            record.problem_description,
+            json.dumps(record.recommended_tasks, ensure_ascii=False),
+            json.dumps(
+                [part.model_dump(mode="json") for part in record.parts_requirements],
+                ensure_ascii=False,
+            ),
+            record.risk_event_ref,
+            record.idempotency_key,
+            record.created_by,
+            record.approved_by,
+            _iso(record.approved_at) if record.approved_at else None,
+            _iso(record.submitted_at) if record.submitted_at else None,
+            record.external_ref,
+            _iso(record.created_at),
+            _iso(record.updated_at),
+        ),
+    )
+    conn.commit()
+
+
+def get_work_order(conn: sqlite3.Connection, work_order_id: str) -> Optional[WorkOrderRecord]:
+    row = conn.execute(
+        "SELECT * FROM work_orders WHERE work_order_id = ?", (work_order_id,)
+    ).fetchone()
+    return _row_to_work_order(row) if row is not None else None
+
+
+def get_work_order_by_idempotency_key(
+    conn: sqlite3.Connection, idempotency_key: str
+) -> Optional[WorkOrderRecord]:
+    row = conn.execute(
+        "SELECT * FROM work_orders WHERE idempotency_key = ?", (idempotency_key,)
+    ).fetchone()
+    return _row_to_work_order(row) if row is not None else None
+
+
+def list_work_orders(
+    conn: sqlite3.Connection,
+    asset_id: Optional[str] = None,
+    status: Optional[WorkOrderStatus] = None,
+    limit: int = 100,
+) -> list[WorkOrderRecord]:
+    sql = "SELECT * FROM work_orders"
+    conditions: list[str] = []
+    params: list[object] = []
+    if asset_id is not None:
+        conditions.append("asset_id = ?")
+        params.append(asset_id)
+    if status is not None:
+        conditions.append("status = ?")
+        params.append(status.value)
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
+    sql += " ORDER BY created_at DESC, work_order_id DESC LIMIT ?"
+    params.append(limit)
+    return [_row_to_work_order(row) for row in conn.execute(sql, params)]
+
+
+_WORK_ORDER_COLUMNS = frozenset(
+    {
+        "status",
+        "priority",
+        "maintenance_type",
+        "problem_description",
+        "risk_event_ref",
+        "approved_by",
+        "approved_at",
+        "submitted_at",
+        "external_ref",
+    }
+)
+
+
+def update_work_order(
+    conn: sqlite3.Connection, work_order_id: str, **fields: object
+) -> WorkOrderRecord:
+    """Update allowed columns (plus ``updated_at``); unknown fields rejected."""
+    unknown = set(fields) - _WORK_ORDER_COLUMNS
+    if unknown:
+        raise ValueError(f"cannot update work-order columns: {sorted(unknown)}")
+    assignments = ["updated_at = ?"]
+    params: list[object] = [_iso(utc_now())]
+    for name, value in fields.items():
+        if name in {"approved_at", "submitted_at"} and isinstance(value, datetime):
+            value = _iso(value)
+        elif name == "status" and hasattr(value, "value"):
+            value = value.value
+        assignments.append(f"{name} = ?")
+        params.append(value)
+    params.append(work_order_id)
+    conn.execute(
+        f"UPDATE work_orders SET {', '.join(assignments)} WHERE work_order_id = ?",
+        params,
+    )
+    conn.commit()
+    record = get_work_order(conn, work_order_id)
+    assert record is not None  # caller must have fetched it beforehand
+    return record
+
+
+def next_work_order_id(conn: sqlite3.Connection) -> str:
+    """Sequential id ``WO-000001`` (configurable prefix)."""
+    row = conn.execute("SELECT COUNT(*) AS n FROM work_orders").fetchone()
+    return f"{config.WORK_ORDER_ID_PREFIX}{int(row['n']) + 1:06d}"
+
+
+# ----------------------------------------------------------- agent runs ----
+
+
+def record_agent_run(conn: sqlite3.Connection, result: AgentRunResult) -> None:
+    """Persist one completed agent run (write-once audit record; in-flight
+    runs are not journaled in the MVP)."""
+    conn.execute(
+        """
+        INSERT INTO agent_runs
+            (run_id, asset_id, started_at, finished_at, status, tool_trace,
+             model_version, result)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            result.run_id,
+            result.asset_id,
+            _iso(result.started_at),
+            _iso(result.finished_at) if result.finished_at else None,
+            result.status.value,
+            json.dumps(
+                [trace.model_dump(mode="json") for trace in result.tool_trace],
+                ensure_ascii=False,
+            ),
+            result.model_provider,
+            result.model_dump_json(),
+        ),
+    )
+    conn.commit()
+
+
+def get_agent_run(conn: sqlite3.Connection, run_id: str) -> Optional[AgentRunResult]:
+    row = conn.execute(
+        "SELECT result FROM agent_runs WHERE run_id = ?", (run_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    return AgentRunResult.model_validate_json(row["result"])
+
+
+def list_agent_runs(
+    conn: sqlite3.Connection, asset_id: Optional[str] = None, limit: int = 50
+) -> list[AgentRunResult]:
+    sql = "SELECT result FROM agent_runs"
+    params: list[object] = []
+    if asset_id is not None:
+        sql += " WHERE asset_id = ?"
+        params.append(asset_id)
+    sql += " ORDER BY started_at DESC, run_id DESC LIMIT ?"
+    params.append(limit)
+    return [
+        AgentRunResult.model_validate_json(row["result"])
+        for row in conn.execute(sql, params)
     ]
