@@ -2,6 +2,40 @@
 
 ## 2026-10-27
 
+### Added — Milestone 6: Acceptance (5-Layer Test System, Evaluation Summary, Pilot Plan)
+
+- **Acceptance-summary collector** (`scripts/collect_metrics.py`): aggregates
+  the evaluation artifacts (`model_evaluation.json`, `rag_evaluation.json`,
+  `agent_evaluation.json`, optional real-LLM report) into
+  `data/processed/evaluation_summary.json` — per-artifact gates plus the
+  **§10.2 acceptance table** (11 rows: target / measured / status PASS|FAIL|
+  INFO|MISSING with provenance). Business-value metrics (downtime/MTBF/MTTR)
+  are honestly MISSING until the pilot collects real baselines (spec §10.3:
+  no counterfactual claims); overall passes iff no FAIL and no required
+  artifact missing. Current real run: **overall_passed = true** (recall 1.0,
+  false-HIGH 0/2097, lead ≈48.2 h INFO, Recall@5 1.0, citation validity 1.0,
+  unauthorized submits 0, duplicate work orders 0).
+- **Test report** (`docs/test-report.md`, spec §13 deliverable): the five-layer
+  test system mapped layer → test files → case counts → commands → status;
+  the §10.2 table (same-source numbers); the layer-5 human acceptance
+  checklist (equipment engineer sign-off items); honesty note — everything is
+  proven on deterministic synthetic data.
+- **Pilot plan** (`docs/pilot-plan.md`): shadow-run procedure for one real
+  pump / bearing failure mode — data requirements, weekly program (calibrate →
+  shadow → re-calibrate → review), roles, success thresholds to be
+  re-confirmed on real data, exit/rollback criteria, production prerequisites
+  (spec §十一); no work-order submission and no procurement during shadow mode.
+- **7 collector tests** (full aggregation, missing artifacts, gate failure
+  propagation, real-LLM labelling excluded from gates, business-value rows
+  always MISSING, real-artifact smoke). Suite now **247 tests passing**.
+- Roadmap complete: M1–M6 ✅ (spec §四 six stages). Next step is the pilot
+  itself, which requires a real device and the plant team (docs/pilot-plan.md).
+
+### Changed
+
+- README: roadmap M6 ✅, status header links to docs/test-report.md and
+  docs/pilot-plan.md.
+
 ### Added — Milestone 5: Streamlit Dashboard & End-to-End Integration
 
 - **Streamlit dashboard** (`app/dashboard/`): four pages covering the roadmap
