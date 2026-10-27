@@ -26,10 +26,14 @@ from app.schemas import Asset  # noqa: E402
 DEMO_ASSET = Asset(
     asset_id="PUMP_001",
     site_id="SITE_001",
-    model="Centrifugal Pump P-103 (demo)",
+    # "P-103" must match the knowledge-corpus metadata and the inventory
+    # master data (compatible_models) so agent part checks resolve to
+    # CONFIRMED; the display name carries the rest.
+    model="P-103",
     criticality="A",
     description="Demo asset for the M1 data foundation. Synthetic data only.",
 )
+
 
 
 def main() -> None:
@@ -53,6 +57,23 @@ def main() -> None:
     with repository.connect(config.DB_PATH) as conn:
         repository.upsert_asset(conn, DEMO_ASSET)
         attempted, inserted = repository.insert_readings(conn, readings)
+        # Demo inventory master data aligned with the knowledge-corpus BOM
+        # (KB-BOM-001): one compatible in-stock part (-> CONFIRMED), one
+        # compatible out-of-stock part (-> UNAVAILABLE), one incompatible
+        # part (demonstrates the PENDING / skip path).
+        conn.executescript(
+            """
+            INSERT OR IGNORE INTO inventory (part_id, part_name, compatible_models,
+                available_qty, safety_stock, location, lead_time_days, status)
+            VALUES ('CPK-6208','轴承 6208-2RS','P-103',3,1,'A1-01',2,'ACTIVE');
+            INSERT OR IGNORE INTO inventory (part_id, part_name, compatible_models,
+                available_qty, safety_stock, location, lead_time_days, status)
+            VALUES ('CPK-6210','轴承 6210-2RS','P-103;P-999',0,1,'A1-03',14,'ACTIVE');
+            INSERT OR IGNORE INTO inventory (part_id, part_name, compatible_models,
+                available_qty, safety_stock, location, lead_time_days, status)
+            VALUES ('CPK-CL-90','弹性块 CL-90','P-200',5,1,'A1-02',7,'ACTIVE');
+            """
+        )
         latest = repository.get_latest_reading(conn, DEMO_ASSET.asset_id)
 
     assert latest is not None  # we just inserted rows

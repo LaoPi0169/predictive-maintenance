@@ -15,6 +15,10 @@
 > `data/processed/evaluation_summary.json`、影子运行试点计划 `docs/pilot-plan.md`）。
 > 后续：按 `docs/pilot-plan.md` 接入真实设备影子运行（需设备团队执行）。
 
+- 看板与 Agent 的逐步操作说明（含每步业务场景对照与常见错误）：**[`docs/usage-guide.md`](docs/usage-guide.md)**
+- 测试报告（五层测试体系）：[`docs/test-report.md`](docs/test-report.md) ·
+  影子运行试点计划：[`docs/pilot-plan.md`](docs/pilot-plan.md)
+
 ## 业务场景（MVP）
 
 离心泵轴承异常预测：当振动、轴承温度或电机电流出现持续异常时，系统识别风险、
