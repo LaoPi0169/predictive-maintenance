@@ -1,0 +1,20 @@
+# keep the image minimal: runtime needs app/, scripts/, data/knowledge only
+.venv/
+.git/
+.github/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+data/raw/
+data/processed/
+data/pma.db
+data/pma.db-journal
+*.log
+docs/
+specs/
+skills/
+htmlcov/
+.dockerignore
+Dockerfile
+docker-compose.yml

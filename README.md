@@ -17,7 +17,11 @@
 
 - 看板与 Agent 的逐步操作说明（含每步业务场景对照与常见错误）：**[`docs/usage-guide.md`](docs/usage-guide.md)**
 - 测试报告（五层测试体系）：[`docs/test-report.md`](docs/test-report.md) ·
-  影子运行试点计划：[`docs/pilot-plan.md`](docs/pilot-plan.md)
+  影子运行试点计划：[`docs/pilot-plan.md`](docs/pilot-plan.md) ·
+  后续路线图（CMMS 对接 / 方案 B / 跨进程 checkpoint / **Ubuntu Docker 部署**）：
+  [`docs/roadmap-next.md`](docs/roadmap-next.md)（部署文件已入库：
+  `Dockerfile` + `docker-compose.yml`，`docker compose up -d --build` 一键启动）
+
 
 ## 业务场景（MVP）
 

@@ -36,7 +36,12 @@ DEMO_ASSET = Asset(
 
 
 
-def main() -> None:
+def seed(db_path: Path | str | None = None) -> None:
+    """Seed one demo asset + readings (idempotent) into ``db_path``.
+
+    Defaults to ``config.DB_PATH``. Kept parameterizable so the container
+    entrypoint can target a specific database file."""
+    path = Path(db_path) if db_path else config.DB_PATH
     print("Generating deterministic synthetic data (scenario=degradation, seed=42)...")
     df, meta = generate(scenario="degradation", seed=42, periods=4320, freq_minutes=1)
     csv_path, manifest_path = save_scenario(df, meta)
@@ -54,7 +59,7 @@ def main() -> None:
         print(f"    {issue_type:<20} {count}")
 
     readings = to_readings(result.accepted)
-    with repository.connect(config.DB_PATH) as conn:
+    with repository.connect(path) as conn:
         repository.upsert_asset(conn, DEMO_ASSET)
         attempted, inserted = repository.insert_readings(conn, readings)
         # Demo inventory master data aligned with the knowledge-corpus BOM
@@ -77,13 +82,18 @@ def main() -> None:
         latest = repository.get_latest_reading(conn, DEMO_ASSET.asset_id)
 
     assert latest is not None  # we just inserted rows
-    print(f"  db          : {config.DB_PATH}")
+    print(f"  db          : {path}")
     print(f"  readings    : attempted={attempted} inserted={inserted}")
     print(
         f"  latest      : {latest.timestamp.isoformat()} "
         f"vibration={latest.vibration_mm_s} mm/s temp={latest.bearing_temp_c} C"
     )
-    print("Done. Start the API with: .venv\\Scripts\\python -m uvicorn app.main:app --reload")
+    print("Done. Start the API with: .venv\\Scripts\\python -m uvicorn app.main:app --port 8000")
+
+
+def main() -> None:
+    seed()
+
 
 
 if __name__ == "__main__":

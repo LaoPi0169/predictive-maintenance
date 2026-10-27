@@ -1,0 +1,37 @@
+# Predictive Maintenance AI Agent — api + dashboard (docs/roadmap-next.md §4)
+# First run: docker compose up -d --build   (auto-seeds demo data + builds index)
+# Real data: set PMA_DEMO_SEED=0 and place your pma.db/index in the pma-data volume.
+services:
+  api:
+    build: .
+    image: pma:${PMA_VERSION:-0.5.0}
+    container_name: pma-api
+    environment:
+      - PMA_SERVICE_ROLE=api
+      - PMA_DEMO_SEED=${PMA_DEMO_SEED:-1}
+      # optional real LLM: PMA_LLM_PROVIDER/BASE_URL/MODEL/API_KEY via env_file
+    ports:
+      - "8000:8000"
+    volumes:
+      - pma-data:/app/data
+    restart: unless-stopped
+    # healthcheck inherited from Dockerfile (/health)
+
+  dashboard:
+    build: .
+    image: pma:${PMA_VERSION:-0.5.0}
+    container_name: pma-dashboard
+    environment:
+      - PMA_SERVICE_ROLE=dashboard
+      - PMA_API_BASE_URL=http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      disable: true # no service depends on the dashboard; UI is checked in browser
+
+volumes:
+  pma-data:

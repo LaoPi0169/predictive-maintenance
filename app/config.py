@@ -219,5 +219,11 @@ LLM_JSON_MODE = os.getenv("PMA_LLM_JSON_MODE", "1").strip().lower() in {"1", "tr
 # via the §8.3 HTTP contract, not in-process imports).
 API_BASE_URL = os.getenv("PMA_API_BASE_URL", "http://127.0.0.1:8000")
 
+# --------------------------------------------------- M6+: container entry ---
+# Auto-seed demo data when the database is empty (container entrypoint).
+# Set PMA_DEMO_SEED=0 to run against a real/provided database.
+DEMO_SEED = os.getenv("PMA_DEMO_SEED", "1").strip().lower() in {"1", "true", "yes"}
+
+
 
 

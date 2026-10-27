@@ -2,7 +2,36 @@
 
 ## 2026-10-27
 
+### Added — Next-roadmap designs + Ubuntu Docker deployment files
+
+- **`docs/roadmap-next.md`**: executable designs for the four identified
+  follow-ups — ① real CMMS integration (replaceable `CmmsPort` adapter,
+  idempotent execution + read-back verification, configurable field mapping,
+  no new work-order states), ② supervised model 方案 B (train/serve pipeline
+  reusing the frozen feature engineering, calibrated probabilities backfill
+  `confidence`, rules-engine fallback, time-based evaluation), ③ LangGraph
+  cross-process checkpoint (SqliteSaver/Postgres, `thread_id=run_id`,
+  optional interrupt-based approval behind `PMA_AGENT_WAIT_APPROVAL`), with
+  task breakdowns and effort estimates (≈3 / ≈4 / ≈2–3 days).
+- **Containerization files**: `Dockerfile` (python:3.13-slim, non-root,
+  healthcheck), `docker-compose.yml` (api + dashboard over one image,
+  `pma-data` volume, depends_on healthy), `.dockerignore`,
+  `docker/entrypoint_api.py` (role dispatch api|dashboard; idempotent
+  runtime-data preparation: seeds an empty DB only when `PMA_DEMO_SEED=1`,
+  builds the knowledge index only when absent — never overwrites a volume).
+- `scripts/seed_demo.py`: extracted parameterizable `seed(db_path)` (the
+  entrypoint targets a specific database file); demo asset model aligned to
+  `P-103` (matches KB metadata and inventory master data); demo inventory
+  master data seeded (CONFIRMED / out-of-stock / incompatible parts).
+- **4 entrypoint tests** (seed+index on empty volume, idempotent second run,
+  disabled seeding, populated DB never reseeded). Suite now **251 tests**.
+- **Verification status (honest)**: entrypoint data preparation and the full
+  boot path verified locally (empty DB → auto-seed → uvicorn → /health);
+  image build & container run **not verified on this machine (no Docker)** —
+  Ubuntu first-build must run the smoke checklist in roadmap-next.md §4.5.
+
 ### Added — Milestone 6: Acceptance (5-Layer Test System, Evaluation Summary, Pilot Plan)
+
 
 - **Acceptance-summary collector** (`scripts/collect_metrics.py`): aggregates
   the evaluation artifacts (`model_evaluation.json`, `rag_evaluation.json`,
