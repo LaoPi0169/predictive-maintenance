@@ -206,4 +206,12 @@ LLM_BASE_URL = os.getenv("PMA_LLM_BASE_URL", "")
 LLM_API_KEY = os.getenv("PMA_LLM_API_KEY", "")
 LLM_MODEL = os.getenv("PMA_LLM_MODEL", "")
 LLM_TIMEOUT_S = float(os.getenv("PMA_LLM_TIMEOUT_S", "20"))
+# Transport hardening for openai_compatible (M4 real-LLM integration):
+# bounded retries for transient failures (network errors / HTTP 429, 5xx),
+# and an optional OpenAI "json_object" response_format (some compatible
+# servers reject it -> automatic one-time fallback without it).
+LLM_MAX_RETRIES = int(os.getenv("PMA_LLM_MAX_RETRIES", "2"))
+LLM_BACKOFF_S = float(os.getenv("PMA_LLM_BACKOFF_S", "0.5"))
+LLM_JSON_MODE = os.getenv("PMA_LLM_JSON_MODE", "1").strip().lower() in {"1", "true", "yes"}
+
 

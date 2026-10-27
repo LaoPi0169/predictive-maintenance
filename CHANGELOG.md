@@ -2,6 +2,54 @@
 
 ## 2026-10-27
 
+### Added — Real-LLM integration (M4 follow-up)
+
+- **Transport hardening for `openai_compatible`** (`app/agent/llm.py`): bounded
+  retries with linear backoff for network errors/timeouts and HTTP 429/5xx
+  (`PMA_LLM_MAX_RETRIES` / `PMA_LLM_BACKOFF_S`); `response_format
+  json_object` is requested by default (`PMA_LLM_JSON_MODE`) and falls back
+  once to a plain request when a server rejects it
+  (`json_mode_effective` records what actually happened); auth/quota errors
+  fail immediately; error messages never contain the API key; new `probe()`
+  health check.
+- **`scripts/llm_probe.py`**: masked config summary (key length only, never
+  the key) → minimal completion probe → relevance-contract round-trip;
+  exit codes 0 = ready / 1 = endpoint or contract failure / 2 = config
+  incomplete.
+- **`scripts/evaluate_agent.py` is provider-parameterized**
+  (`--provider scripted|none|openai_compatible`): the SAME 11-scenario suite
+  and identical gates run against any provider; real-LLM reports are flagged
+  `deterministic: false` and echo the model + transport configuration;
+  per-scenario durations recorded.
+- **10 offline transport tests** against a local mock HTTP server (retry
+  then succeed, retry exhaustion, immediate auth failure, JSON-mode 400
+  fallback, key redaction, invalid shapes, config wiring); suite now
+  **222 tests passing**.
+- **Test-suite offline guarantee (found during the real run)**: persisted
+  `PMA_LLM_*` user environment variables leaked into the pytest process and
+  briefly made API tests hit the real DeepSeek endpoint (suite time 59.8s,
+  two env-sensitive failures). Root fix: an autouse conftest fixture forces
+  the offline LLM config for every test (tests needing transport details
+  monkeypatch explicitly on top) — verified by running the full suite with
+  the real key still persisted: 222 passed in 22.3s, no network calls.
+- Real-provider run procedure documented (README「接入真实 LLM」): DeepSeek
+  example (`deepseek-chat`) with probe + same-suite re-evaluation; outcome
+  recorded in `specs/2026-10-26-milestone-4-agent-tools/validation.md`.
+- Scripted baseline re-run after the refactor: 11/11 scenarios PASS, gates
+  unchanged (pass rate 1.0, duplicate work orders 0, unauthorized submits 0,
+  citation validity 1.0) — no regression.
+- **Real DeepSeek run (`deepseek-chat`)**: probe PASS (relevance contract
+  judged by the real LLM in Chinese; JSON-mode fallback observed working on
+  the probe call). Same-suite re-run: **10/11 scenarios PASS** — duplicate
+  work orders 0, unauthorized submits 0, citation validity 1.0, injection/
+  approval gates all effective with a real LLM. The single failure (S5) is a
+  scenario-calibration finding, not a mechanism fault: "设备报警了怎么处理"
+  is an in-domain generic question that the real LLM correctly judges
+  semantically relevant to maintenance SOPs — the lexical "generic-word"
+  refusal gap is a stricter-than-semantic scripted rule. Recorded as-is in
+  validation.md; gates and scenarios intentionally left unchanged (the
+  re-run's job is to surface exactly this kind of discrepancy).
+
 ### Added — Milestone 4: Agent & Tool Calling
 
 - **LangGraph bounded business state machine** (`app/agent/graph.py`, user-approved

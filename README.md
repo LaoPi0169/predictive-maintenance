@@ -113,6 +113,44 @@ LLM 只做知识相关性复核与诊断综合，无权选择工具、无权审�
 时显式降级：不做诊断综合、动作退化为通用现场检查并留痕说明，绝不虚构故障模式；
 知识索引缺失同样显式降级。每次运行落盘 `agent_runs`（状态、工具轨迹、结果）。
 
+## 接入真实 LLM（可选能力，OpenAI 兼容端点）
+
+Agent 的 LLM 是可替换端口：默认 `none`（离线降级）、测试用 `scripted`（确定性替代）、
+真实供应商走 **任意 OpenAI 兼容端点**（stdlib 实现，无 SDK，密钥只存环境变量）。
+传输层内置有界重试（网络错误 / HTTP 429、5xx）、JSON 模式自动回退（服务器拒绝
+`response_format` 时降级为普通请求）、错误信息不含密钥。
+
+### 以 DeepSeek 为例（PowerShell，会话级环境变量）
+
+```powershell
+$env:PMA_LLM_PROVIDER = "openai_compatible"
+$env:PMA_LLM_BASE_URL = "https://api.deepseek.com/v1"
+$env:PMA_LLM_MODEL    = "deepseek-chat"
+$env:PMA_LLM_API_KEY  = "<你的密钥>"   # 绝不写入代码或仓库
+# 可选：$env:PMA_LLM_TIMEOUT_S="60"（本地小模型建议调大） $env:PMA_LLM_MAX_RETRIES="2" $env:PMA_LLM_JSON_MODE="1"
+
+# 1) 连通性与契约探针（只打印密钥长度，绝不回显密钥；0=就绪）
+.venv\Scripts\python scripts\llm_probe.py
+
+# 2) 用真实 LLM 重跑同一套 11 场景评测（门禁与 scripted 基线完全相同，结果如实记录）
+.venv\Scripts\python scripts\evaluate_agent.py --provider openai_compatible --out data\processed\agent_evaluation_deepseek.json
+```
+
+其他端点只需换两个变量：Qwen（`https://dashscope.aliyuncs.com/compatible-mode/v1` +
+`qwen-plus`）、OpenAI（`https://api.openai.com/v1` + `gpt-4o-mini`）、本地 Ollama
+（`http://localhost:11434/v1` + 模型名，无需密钥）。
+
+### 真实 LLM 下的行为语义
+
+- LLM 职责不变：只有知识相关性复核与诊断综合；工具顺序由图决定，审批只认服务端
+  记录——**真实 LLM 无法绕过任何安全门禁**（S7 注入场景在任何 provider 下都必须零副作用）；
+- 端点不可用 / 返回非法 JSON → 该次评估以显式失败态留痕（`FAILED_LLM_UNAVAILABLE` /
+  `FAILED_DIAGNOSIS_INVALID`），绝不静默降级为编造内容；
+- 真实 LLM 输出**非字节级可复现**（temperature=0 缓解但不消除方差）：评测报告标记
+  `deterministic: false` 并记录模型与传输配置；门禁与基线一致，失败场景如实呈现；
+- 单元测试与 CI 保持全离线（scripted）；真实供应商评测是一次性的、显式标注的运行。
+
+
 
 ## 项目结构
 
@@ -150,7 +188,8 @@ scripts/
 ├── build_knowledge_index.py  # 知识索引构建 CLI
 ├── evaluate_baseline.py   # 基线评测：检出率 / 提前量 / 误报（spec §10.2 指标）
 ├── evaluate_rag.py        # 检索评测：Recall@5 / MRR / 引用 / 版本 / 拒绝（spec §7.3/§10.2）
-└── evaluate_agent.py      # Agent 场景评测：出单/拒绝/幂等/注入/越权等 11 场景（skills/rag-evaluation §6）
+├── evaluate_agent.py      # Agent 场景评测：出单/拒绝/幂等/注入/越权等 11 场景（--provider 可选真实 LLM）
+└── llm_probe.py           # 真实 LLM 端点探针：连通性 + JSON 契约（不回显密钥）
 tests/                 # 单元与集成测试（数据质量 + 模型 + RAG 三层测试体系）
 specs/                 # 各里程碑的 feature 规格（requirements/plan/validation）
 spec/Project.md        # 项目总方案（唯一事实来源）

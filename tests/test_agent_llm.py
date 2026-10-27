@@ -7,6 +7,7 @@ import socket
 
 import pytest
 
+from app import config
 from app.agent import llm
 from app.schemas import Citation, KnowledgeHit
 
@@ -36,7 +37,10 @@ SOP_TEXT = (
 # ------------------------------------------------------------ provider ----
 
 
-def test_build_chat_model_provider_resolution():
+def test_build_chat_model_provider_resolution(monkeypatch):
+    # explicit isolation: the ValueError path requires an unconfigured endpoint
+    monkeypatch.setattr(config, "LLM_BASE_URL", "")
+    monkeypatch.setattr(config, "LLM_MODEL", "")
     assert llm.build_chat_model("none").provider == "none"
     assert llm.build_chat_model("scripted").provider == "scripted"
     with pytest.raises(ValueError):
@@ -61,7 +65,10 @@ def test_openai_compatible_fails_explicitly_when_unreachable():
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     model = llm.OpenAICompatibleChatModel(
-        base_url=f"http://127.0.0.1:{port}", model="demo-model", timeout_s=2
+        base_url=f"http://127.0.0.1:{port}",
+        model="demo-model",
+        timeout_s=2,
+        max_retries=0,
     )
     with pytest.raises(llm.LlmUnavailableError):
         model.complete("system", "user")

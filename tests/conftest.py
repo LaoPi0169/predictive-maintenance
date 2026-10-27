@@ -20,6 +20,21 @@ from app.knowledge.retriever import KnowledgeIndex
 from app.schemas import Asset
 
 
+@pytest.fixture(autouse=True)
+def _force_offline_llm(monkeypatch):
+    """Guarantee the whole suite runs offline regardless of machine env.
+
+    Found during the real-DeepSeek evaluation: persisted PMA_LLM_* user
+    environment variables leaked into the pytest process and made API tests
+    call the real endpoint. Never again - every test gets the offline config,
+    tests needing transport details monkeypatch explicitly on top.
+    """
+    monkeypatch.setattr(config, "LLM_PROVIDER", "none")
+    monkeypatch.setattr(config, "LLM_BASE_URL", "")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    monkeypatch.setattr(config, "LLM_MODEL", "")
+
+
 @pytest.fixture(scope="session")
 def knowledge_index_paths(tmp_path_factory) -> tuple[pathlib.Path, pathlib.Path]:
     """Paths of a session-built index (for monkeypatching config in API tests)."""

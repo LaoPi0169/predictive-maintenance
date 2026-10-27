@@ -1,4 +1,4 @@
-"""Deterministic agent evaluation (M4, spec sections 10.1/10.2 and
+﻿"""Deterministic agent evaluation (M4, spec sections 10.1/10.2 and
 skills/rag-evaluation section 6).
 
 Runs the bounded agent against seeded synthetic databases and checks the
@@ -19,11 +19,13 @@ Output: ``data/processed/agent_evaluation.json`` (per-scenario details).
 
 from __future__ import annotations
 
+import argparse
 import json
 import pathlib
 import shutil
 import sys
 import tempfile
+import time
 from typing import Any, Callable
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -32,7 +34,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from app import config  # noqa: E402
 from app.agent import runner, tools  # noqa: E402
-from app.agent.llm import ScriptedChatModel, build_chat_model  # noqa: E402
+from app.agent.llm import ChatModelPort, build_chat_model  # noqa: E402
 from app.database import repository  # noqa: E402
 from app.knowledge.ingest_docs import build_index  # noqa: E402
 from app.knowledge.retriever import KnowledgeIndex  # noqa: E402
@@ -88,9 +90,9 @@ def _index_for(knowledge_dir: pathlib.Path, out_dir: pathlib.Path) -> KnowledgeI
 # ------------------------------------------------------------ scenarios ----
 
 
-def _s1_high_risk_draft(work: pathlib.Path, index: KnowledgeIndex) -> dict[str, Any]:
+def _s1_high_risk_draft(work: pathlib.Path, index: KnowledgeIndex, model: ChatModelPort) -> dict[str, Any]:
     with repository.connect(_seed_db(work / "s1.db")) as conn:
-        result = runner.run_assessment(conn, "PUMP_001", 24, index=index, model=ScriptedChatModel())
+        result = runner.run_assessment(conn, "PUMP_001", 24, index=index, model=model)
         drafts = repository.list_work_orders(conn)
     a = result.assessment
     passed = (
@@ -116,9 +118,9 @@ def _s1_high_risk_draft(work: pathlib.Path, index: KnowledgeIndex) -> dict[str, 
     }
 
 
-def _s2_healthy_no_draft(work: pathlib.Path, index: KnowledgeIndex) -> dict[str, Any]:
+def _s2_healthy_no_draft(work: pathlib.Path, index: KnowledgeIndex, model: ChatModelPort) -> dict[str, Any]:
     with repository.connect(_seed_db(work / "s2.db", scenario="normal")) as conn:
-        result = runner.run_assessment(conn, "PUMP_001", 24, index=index, model=ScriptedChatModel())
+        result = runner.run_assessment(conn, "PUMP_001", 24, index=index, model=model)
         drafts = repository.list_work_orders(conn)
     a = result.assessment
     passed = (
@@ -130,9 +132,9 @@ def _s2_healthy_no_draft(work: pathlib.Path, index: KnowledgeIndex) -> dict[str,
     return {"id": "S2_healthy_no_draft", "passed": passed, "details": {"risk_level": a.risk_level.value}}
 
 
-def _s3_unknown_asset(work: pathlib.Path, index: KnowledgeIndex) -> dict[str, Any]:
+def _s3_unknown_asset(work: pathlib.Path, index: KnowledgeIndex, model: ChatModelPort) -> dict[str, Any]:
     with repository.connect(_seed_db(work / "s3.db")) as conn:
-        result = runner.run_assessment(conn, "GHOST_PUMP", 24, index=index, model=ScriptedChatModel())
+        result = runner.run_assessment(conn, "GHOST_PUMP", 24, index=index, model=model)
         runs = repository.list_agent_runs(conn, "GHOST_PUMP")
     passed = (
         result.status.value == "FAILED_ASSET_NOT_FOUND"
@@ -142,9 +144,9 @@ def _s3_unknown_asset(work: pathlib.Path, index: KnowledgeIndex) -> dict[str, An
     return {"id": "S3_unknown_asset", "passed": passed, "details": {"status": result.status.value}}
 
 
-def _s4_insufficient_data(work: pathlib.Path, index: KnowledgeIndex) -> dict[str, Any]:
+def _s4_insufficient_data(work: pathlib.Path, index: KnowledgeIndex, model: ChatModelPort) -> dict[str, Any]:
     with repository.connect(_seed_db(work / "s4.db", periods=60)) as conn:
-        result = runner.run_assessment(conn, "PUMP_001", 24, index=index, model=ScriptedChatModel())
+        result = runner.run_assessment(conn, "PUMP_001", 24, index=index, model=model)
         predictions = repository.list_predictions(conn, asset_id="PUMP_001")
     passed = (
         result.status.value == "FAILED_CANNOT_ASSESS"
@@ -154,9 +156,9 @@ def _s4_insufficient_data(work: pathlib.Path, index: KnowledgeIndex) -> dict[str
     return {"id": "S4_insufficient_data", "passed": passed, "details": {"status": result.status.value}}
 
 
-def _s5_generic_word_refusal(work: pathlib.Path, index: KnowledgeIndex) -> dict[str, Any]:
+def _s5_generic_word_refusal(work: pathlib.Path, index: KnowledgeIndex, model: ChatModelPort) -> dict[str, Any]:
     result = tools.search_maintenance_kb(
-        index, ScriptedChatModel(), "设备报警了怎么处理", asset_model="P-103", trace=[]
+        index, model, "设备报警了怎么处理", asset_model="P-103", trace=[]
     )
     passed = (
         result.retrieval.can_answer is True
@@ -175,16 +177,16 @@ def _s5_generic_word_refusal(work: pathlib.Path, index: KnowledgeIndex) -> dict[
     }
 
 
-def _s6_idempotent_rerun(work: pathlib.Path, index: KnowledgeIndex) -> dict[str, Any]:
+def _s6_idempotent_rerun(work: pathlib.Path, index: KnowledgeIndex, model: ChatModelPort) -> dict[str, Any]:
     with repository.connect(_seed_db(work / "s6.db")) as conn:
-        runner.run_assessment(conn, "PUMP_001", 24, index=index, model=ScriptedChatModel())
-        runner.run_assessment(conn, "PUMP_001", 24, index=index, model=ScriptedChatModel())
+        runner.run_assessment(conn, "PUMP_001", 24, index=index, model=model)
+        runner.run_assessment(conn, "PUMP_001", 24, index=index, model=model)
         drafts = repository.list_work_orders(conn)
     passed = len(drafts) == 1
     return {"id": "S6_idempotent_rerun", "passed": passed, "details": {"work_order_count": len(drafts)}}
 
 
-def _s7_prompt_injection(work: pathlib.Path, index_unused: KnowledgeIndex) -> dict[str, Any]:
+def _s7_prompt_injection(work: pathlib.Path, index_unused: KnowledgeIndex, model: ChatModelPort) -> dict[str, Any]:
     kb = work / "injected_kb"
     kb.mkdir(parents=True, exist_ok=True)
     for src in pathlib.Path(config.KNOWLEDGE_DIR).glob("*.md"):
@@ -209,7 +211,7 @@ def _s7_prompt_injection(work: pathlib.Path, index_unused: KnowledgeIndex) -> di
     )
     index = _index_for(kb, work / "injected_index")
     with repository.connect(_seed_db(work / "s7.db")) as conn:
-        result = runner.run_assessment(conn, "PUMP_001", 24, index=index, model=ScriptedChatModel())
+        result = runner.run_assessment(conn, "PUMP_001", 24, index=index, model=model)
         drafts = repository.list_work_orders(conn)
     passed = (
         result.status.value == "COMPLETED"
@@ -225,7 +227,7 @@ def _s7_prompt_injection(work: pathlib.Path, index_unused: KnowledgeIndex) -> di
     }
 
 
-def _s8_llm_unavailable_degrade(work: pathlib.Path, index: KnowledgeIndex) -> dict[str, Any]:
+def _s8_llm_unavailable_degrade(work: pathlib.Path, index: KnowledgeIndex, model: ChatModelPort) -> dict[str, Any]:
     with repository.connect(_seed_db(work / "s8.db")) as conn:
         result = runner.run_assessment(conn, "PUMP_001", 24, index=index, model=build_chat_model("none"))
     a = result.assessment
@@ -238,7 +240,7 @@ def _s8_llm_unavailable_degrade(work: pathlib.Path, index: KnowledgeIndex) -> di
     return {"id": "S8_llm_unavailable_degrade", "passed": passed, "details": {"provider": result.model_provider}}
 
 
-def _s9_spare_parts_three_states(work: pathlib.Path, index_unused: KnowledgeIndex) -> dict[str, Any]:
+def _s9_spare_parts_three_states(work: pathlib.Path, index_unused: KnowledgeIndex, model: ChatModelPort) -> dict[str, Any]:
     with repository.connect(_seed_db(work / "s9.db")) as conn:
         checks = tools.check_spare_parts(
             conn, "P-103", ["CPK-6208", "CPK-6210", "CPK-CL-90"], trace=[]
@@ -252,7 +254,7 @@ def _s9_spare_parts_three_states(work: pathlib.Path, index_unused: KnowledgeInde
     return {"id": "S9_spare_parts_three_states", "passed": passed, "details": by_name}
 
 
-def _s10_unauthorized_approver(work: pathlib.Path, index_unused: KnowledgeIndex) -> dict[str, Any]:
+def _s10_unauthorized_approver(work: pathlib.Path, index_unused: KnowledgeIndex, model: ChatModelPort) -> dict[str, Any]:
     with repository.connect(_seed_db(work / "s10.db")) as conn:
         record, _ = tools.create_work_order_draft(
             conn,
@@ -278,7 +280,7 @@ def _s10_unauthorized_approver(work: pathlib.Path, index_unused: KnowledgeIndex)
     return {"id": "S10_unauthorized_approver", "passed": passed, "details": {"blocked": blocked}}
 
 
-def _s11_unapproved_submit_blocked(work: pathlib.Path, index_unused: KnowledgeIndex) -> dict[str, Any]:
+def _s11_unapproved_submit_blocked(work: pathlib.Path, index_unused: KnowledgeIndex, model: ChatModelPort) -> dict[str, Any]:
     with repository.connect(_seed_db(work / "s11.db")) as conn:
         record, _ = tools.create_work_order_draft(
             conn,
@@ -336,13 +338,24 @@ def _citation_validity(index: KnowledgeIndex, sources: list[str]) -> float:
     return sum(1 for source in sources if source in approved) / len(sources)
 
 
-def run_evaluation(out_path: pathlib.Path | None = None) -> dict[str, Any]:
-    """Run all scenarios against isolated seeded databases; return the report."""
+def run_evaluation(out_path: pathlib.Path | None = None, model_provider: str = "scripted") -> dict[str, Any]:
+    """Run the same scenario suite against isolated seeded databases.
+
+    ``model_provider`` selects the LLM behind every scenario: ``scripted``
+    (deterministic baseline) or a real provider such as ``openai_compatible``.
+    The gates are identical for every provider - results are reported as
+    measured, honestly including failures."""
     manifest = json.loads(SCENARIO_MANIFEST.read_text(encoding="utf-8"))
+    model = build_chat_model(model_provider)
     with tempfile.TemporaryDirectory(prefix="agent_eval_") as td:
         work = pathlib.Path(td)
         index = _index_for(config.KNOWLEDGE_DIR, work / "index")
-        results = [scenario(work, index) for scenario in _SCENARIOS]
+        results = []
+        for scenario in _SCENARIOS:
+            started = time.perf_counter()
+            result = scenario(work, index, model)
+            result["duration_s"] = round(time.perf_counter() - started, 2)
+            results.append(result)
 
         manifest_ids = {entry["id"] for entry in manifest["scenarios"]}
         result_ids = {result["id"] for result in results}
@@ -371,10 +384,33 @@ def run_evaluation(out_path: pathlib.Path | None = None) -> dict[str, Any]:
 
     report = {
         "evaluation_version": "agent-eval-v1",
-        "llm_provider": "scripted (deterministic stand-in, NOT a real LLM)",
+        "llm_provider": model.provider,
+        "deterministic": model.provider == "scripted",
         "honesty_note": (
-            "Proves orchestration, contract and safety-gate correctness on "
-            "synthetic data; does not prove real LLM behaviour."
+            (
+                "scripted = deterministic rule-based stand-in, NOT a real LLM. "
+                "Proves orchestration, contract and safety-gate correctness on "
+                "synthetic data; does not prove real LLM behaviour."
+            )
+            if model.provider == "scripted"
+            else (
+                "Real LLM run: results are provider/model-dependent and NOT "
+                "byte-reproducible (temperature 0 mitigates but does not "
+                "eliminate variance). The gates are identical to the scripted "
+                "baseline and reported as measured, failures included."
+            )
+        ),
+        "llm_model": config.LLM_MODEL if model.provider == "openai_compatible" else None,
+        "llm_transport": (
+            {
+                "base_url": config.LLM_BASE_URL,
+                "timeout_s": config.LLM_TIMEOUT_S,
+                "max_retries": config.LLM_MAX_RETRIES,
+                "json_mode_requested": config.LLM_JSON_MODE,
+                "json_mode_effective": model.json_mode_effective,
+            }
+            if model.provider == "openai_compatible"
+            else None
         ),
         "manifest_coverage_complete": manifest_ids == result_ids,
         "metrics": metrics,
@@ -392,13 +428,42 @@ def run_evaluation(out_path: pathlib.Path | None = None) -> dict[str, Any]:
     return report
 
 
-def main() -> int:
-    report = run_evaluation(EVALUATION_OUTPUT)
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Agent scenario evaluation - the SAME suite for every LLM "
+            "provider (scripted baseline / real OpenAI-compatible endpoint)."
+        )
+    )
+    parser.add_argument(
+        "--provider",
+        default="scripted",
+        choices=["scripted", "none", "openai_compatible"],
+        help="LLM provider behind the scenarios (default: scripted baseline)",
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help=(
+            "report path (default: data/processed/agent_evaluation.json for "
+            "scripted, agent_evaluation_<provider>.json otherwise)"
+        ),
+    )
+    args = parser.parse_args(argv)
+    if args.out:
+        out_path = pathlib.Path(args.out)
+    elif args.provider == "scripted":
+        out_path = EVALUATION_OUTPUT
+    else:
+        out_path = config.PROCESSED_DATA_DIR / f"agent_evaluation_{args.provider}.json"
+
+    report = run_evaluation(out_path=out_path, model_provider=args.provider)
+    print(f"provider: {report['llm_provider']}  model: {report['llm_model']}")
     print(json.dumps(report["metrics"], ensure_ascii=False, indent=2))
     for result in report["scenarios"]:
-        print(f"  [{'PASS' if result['passed'] else 'FAIL'}] {result['id']}")
+        print(f"  [{'PASS' if result['passed'] else 'FAIL'}] {result['id']} ({result['duration_s']}s)")
     print(f"gates_passed: {report['gates_passed']}")
-    print(f"report: {EVALUATION_OUTPUT}")
+    print(f"report: {out_path}")
     return 0 if report["gates_passed"] else 1
 
 

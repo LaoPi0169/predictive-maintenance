@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Protocol
@@ -174,17 +175,41 @@ class ScriptedChatModel:
 
 
 class OpenAICompatibleChatModel:
-    """Minimal stdlib client for OpenAI-compatible /chat/completions.
+    """Minimal stdlib client for any OpenAI-compatible /chat/completions
+    endpoint (DeepSeek, Qwen/DashScope compatible mode, Moonshot, Ollama,
+    vLLM, LM Studio, ...).
 
     Enabled only through ``PMA_LLM_*`` environment variables; never used in
-    tests/CI (offline determinism). Any transport or HTTP failure maps to
-    ``LlmUnavailableError``; a response without message content maps to
-    ``LlmResponseInvalidError``.
+    unit tests/CI for model behaviour (offline determinism - the transport
+    itself IS tested against a local mock server). Semantics:
+
+    - bounded retries (``max_retries``) for transient failures only: network
+      errors/timeouts and HTTP 429/500/502/503/504, with linear backoff;
+    - ``response_format: {"type": "json_object"}`` is requested when
+      ``json_mode`` is on; if the server answers 400/422 the client falls
+      back once to a plain request and records ``json_mode_effective=False``;
+    - any other HTTP error (401/403/404 ...) fails immediately;
+    - error messages never contain the API key;
+    - a 200 response whose content is missing/empty or whose HTTP envelope is
+      not JSON raises ``LlmResponseInvalidError`` (content-level invalidity is
+      the model's answer - the graph turns it into an explicit failure state,
+      it is not retried here).
     """
 
     provider = "openai_compatible"
 
-    def __init__(self, base_url: str, model: str, api_key: str = "", timeout_s: float = 20.0):
+    _RETRYABLE_HTTP_CODES = frozenset({429, 500, 502, 503, 504})
+
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str = "",
+        timeout_s: float = 20.0,
+        max_retries: int = 2,
+        json_mode: bool = True,
+        backoff_s: float = 0.5,
+    ):
         if not base_url or not model:
             raise ValueError(
                 "openai_compatible provider needs PMA_LLM_BASE_URL and PMA_LLM_MODEL"
@@ -193,9 +218,14 @@ class OpenAICompatibleChatModel:
         self._model = model
         self._api_key = api_key
         self._timeout_s = timeout_s
+        self._max_retries = max(0, int(max_retries))
+        self._backoff_s = max(0.0, float(backoff_s))
+        self._json_mode = bool(json_mode)
+        # downgraded to False when the server rejects response_format
+        self.json_mode_effective = bool(json_mode)
 
-    def complete(self, system: str, user: str) -> str:
-        body = {
+    def _build_request(self, system: str, user: str) -> urllib.request.Request:
+        body: dict[str, Any] = {
             "model": self._model,
             "messages": [
                 {"role": "system", "content": system},
@@ -203,7 +233,9 @@ class OpenAICompatibleChatModel:
             ],
             "temperature": 0,
         }
-        request = urllib.request.Request(
+        if self.json_mode_effective:
+            body["response_format"] = {"type": "json_object"}
+        return urllib.request.Request(
             f"{self._base_url}/chat/completions",
             data=json.dumps(body).encode("utf-8"),
             headers={
@@ -212,28 +244,74 @@ class OpenAICompatibleChatModel:
             },
             method="POST",
         )
+
+    def _post(self, request: urllib.request.Request) -> str:
+        """One HTTP round-trip; raises LlmUnavailableError/LlmResponseInvalidError."""
         try:
             with urllib.request.urlopen(request, timeout=self._timeout_s) as response:
-                if response.status != 200:
-                    raise LlmUnavailableError(
-                        f"LLM endpoint returned HTTP {response.status}"
-                    )
-                payload = json.loads(response.read().decode("utf-8"))
-        except LlmUnavailableError:
-            raise
+                return response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", "replace")[:300]
+            except OSError:
+                pass
+            raise LlmUnavailableError(
+                f"LLM endpoint returned HTTP {exc.code}: {detail or exc.reason}"
+            ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise LlmUnavailableError(f"LLM endpoint unreachable: {exc}") from exc
-        except json.JSONDecodeError as exc:
-            raise LlmResponseInvalidError(
-                f"LLM endpoint returned non-JSON body: {exc}"
-            ) from exc
-        try:
-            content = payload["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise LlmResponseInvalidError(f"unexpected completion shape: {exc}") from exc
-        if not isinstance(content, str) or not content.strip():
-            raise LlmResponseInvalidError("LLM returned empty content")
-        return content
+
+    def complete(self, system: str, user: str) -> str:
+        last_error: LlmUnavailableError | None = None
+        for attempt in range(self._max_retries + 1):
+            if attempt:
+                time.sleep(min(self._backoff_s * attempt, 2.0))
+            try:
+                raw = self._post(self._build_request(system, user))
+            except LlmUnavailableError as exc:
+                message = str(exc)
+                if "HTTP 400" in message or "HTTP 422" in message:
+                    if self.json_mode_effective:
+                        # server rejected response_format -> one plain retry
+                        self.json_mode_effective = False
+                        last_error = exc
+                        continue
+                    raise  # plain request already rejected: not retryable
+                if any(f"HTTP {code}" in message for code in self._RETRYABLE_HTTP_CODES):
+                    last_error = exc
+                    continue
+                raise  # auth / quota / not-found style errors: fail immediately
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise LlmResponseInvalidError(
+                    f"LLM endpoint returned non-JSON body: {exc}"
+                ) from exc
+            try:
+                content = payload["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError) as exc:
+                raise LlmResponseInvalidError(f"unexpected completion shape: {exc}") from exc
+            if not isinstance(content, str) or not content.strip():
+                raise LlmResponseInvalidError("LLM returned empty content")
+            return content
+        raise LlmUnavailableError(
+            f"LLM endpoint failed after {self._max_retries + 1} attempt(s); last error: {last_error}"
+        )
+
+    def probe(self) -> dict[str, Any]:
+        """Connectivity + contract sanity check (used by scripts/llm_probe.py)."""
+        started = time.perf_counter()
+        content = self.complete(
+            "You are a connectivity probe. Reply with the shortest possible answer.",
+            "只回复两个字：OK",
+        )
+        return {
+            "latency_ms": round((time.perf_counter() - started) * 1000.0, 1),
+            "model": self._model,
+            "content": content.strip()[:80],
+            "json_mode_effective": self.json_mode_effective,
+        }
 
 
 def build_chat_model(provider: str | None = None) -> ChatModelPort:
@@ -249,6 +327,9 @@ def build_chat_model(provider: str | None = None) -> ChatModelPort:
             model=config.LLM_MODEL,
             api_key=config.LLM_API_KEY,
             timeout_s=config.LLM_TIMEOUT_S,
+            max_retries=config.LLM_MAX_RETRIES,
+            json_mode=config.LLM_JSON_MODE,
+            backoff_s=config.LLM_BACKOFF_S,
         )
     raise ValueError(f"unknown LLM provider: {selected!r}")
 

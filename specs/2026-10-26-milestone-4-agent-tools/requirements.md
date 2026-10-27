@@ -131,3 +131,10 @@ M2 回答"设备有多大风险"，M3 回答"应该检查什么、为什么检�
   读回校验（skill #6 read-back）以本地库状态为准；
 - **未决**：真实 LLM 供应商选型与审批（openai_compatible 已留接口）；
   LangGraph SQLite checkpoint（跨进程恢复）在真实部署时评估。
+
+> **更新（2026-10-27）**：真实供应商通道已定为 **OpenAI 兼容端点**（示例
+> DeepSeek `deepseek-chat`），密钥仅存于用户环境变量（`PMA_LLM_API_KEY`），
+> 绝不入库；接入机制已交付——`scripts/llm_probe.py` 探针 +
+> `scripts/evaluate_agent.py --provider openai_compatible` 同套评测重跑
+> （详见 validation.md「真实 LLM 接入与重跑」）。
+
