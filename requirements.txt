@@ -22,4 +22,9 @@ httpx>=0.27
 # transitive dependency. The LLM stays behind a replaceable in-house port
 # (none / scripted / openai_compatible via PMA_LLM_* env) — no LLM SDK.
 langgraph==1.2.18
+# M5 (dashboard & end-to-end) — roadmap-selected frontend (spec §2.1):
+# Streamlit renders the demo dashboard over the §8.3 HTTP contract
+# (app/dashboard/). UI framework only; no network calls at import time.
+streamlit==1.66.1
+
 

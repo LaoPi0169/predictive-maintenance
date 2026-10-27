@@ -51,7 +51,8 @@ from app.schemas import (
 )
 from app.workorders import service
 
-app = FastAPI(title="Predictive Maintenance API", version="0.4.0")
+app = FastAPI(title="Predictive Maintenance API", version="0.5.0")
+
 
 
 @app.get("/health")
@@ -356,3 +357,20 @@ def submit_work_order(work_order_id: str) -> WorkOrderRecord:
                 status_code=409,
                 detail={"error": "INVALID_TRANSITION", "reason": str(exc)},
             )
+
+
+# ----------------------------------------------- M5: agent-run audit feed --
+
+
+@app.get("/api/v1/agent-runs", response_model=list[AgentRunResult])
+def list_agent_runs(asset_id: str | None = None, limit: int = 50) -> list[AgentRunResult]:
+    """Agent run audit trail, newest first (M5 dashboard operations-log page).
+
+    Declared addition beyond the §8.3 table (same precedent as /health and
+    /knowledge/search): a read-only view of ``agent_runs`` including the
+    per-call ``tool_trace`` — the operations log must show what the agent
+    actually did, not only what it concluded.
+    """
+    limit = max(1, min(limit, 200))
+    with repository.connect(config.DB_PATH) as conn:
+        return repository.list_agent_runs(conn, asset_id=asset_id, limit=limit)

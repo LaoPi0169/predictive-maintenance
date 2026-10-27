@@ -2,6 +2,43 @@
 
 ## 2026-10-27
 
+### Added — Milestone 5: Streamlit Dashboard & End-to-End Integration
+
+- **Streamlit dashboard** (`app/dashboard/`): four pages covering the roadmap
+  stage-05 scope — 风险看板 (asset list with per-asset latest risk badges +
+  distribution), 设备详情与维修建议 (prediction assessment + one-click agent
+  assessment rendering evidence, failure-mode candidates with honest null
+  confidence, grounded actions + knowledge chunks, three-state parts,
+  pending-approval banner, uncertainty notes, tool-trace expander, knowledge
+  lookup box), 工单审核 (status-filtered list, approve/reject with the
+  demo-grade identity headers, submit to the simulated CMMS, 403/409 server
+  reasons shown), 操作日志 (agent runs with expandable per-call tool traces,
+  prediction audit incl. failure states, work-order records).
+- **Fetch layer with no streamlit dependency** (`app/dashboard/backend.py`):
+  `DashboardClient` (httpx) typed over the §8.3 contract — frozen v1 models
+  are re-validated on every response so contract drift breaks tests; unified
+  `DashboardError` (`BACKEND_UNREACHABLE` / `HTTP_<code>`) passes the
+  server's error body through (FastAPI `{"detail": ...}` unwrapped) so the
+  UI shows reasons instead of inventing data; pure display-shaping helpers
+  (risk/work-order/parts badges).
+- **New audit endpoint** `GET /api/v1/agent-runs?asset_id=&limit=` (declared
+  addition beyond the §8.3 table, /health precedent): read-only
+  `agent_runs` view with per-call tool traces for the operations-log page.
+- **End-to-end integration tests**: the fetch layer drives a REAL uvicorn
+  server on an ephemeral localhost port (full HTTP stack, offline,
+  deterministic) through the complete business flow — prediction → agent
+  assessment → pending work order → approval → submission → audit trail —
+  plus healthy-asset no-draft and every error state (404/403/409/503,
+  backend unreachable). `app/dashboard/ui.py` stays an import-safe thin
+  shell (rendering validated manually per the acceptance checklist).
+- Dependency: `streamlit==1.66.1` (roadmap-selected frontend, spec §2.1).
+- Suite now **240 tests passing** (M1–M4 baseline 222 + 18 new).
+
+### Changed
+
+- README: two-terminal demo startup (uvicorn + streamlit run), dashboard
+  pages, directory tree, roadmap M5 ✅.
+
 ### Added — Real-LLM integration (M4 follow-up)
 
 - **Transport hardening for `openai_compatible`** (`app/agent/llm.py`): bounded

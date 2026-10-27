@@ -214,4 +214,10 @@ LLM_MAX_RETRIES = int(os.getenv("PMA_LLM_MAX_RETRIES", "2"))
 LLM_BACKOFF_S = float(os.getenv("PMA_LLM_BACKOFF_S", "0.5"))
 LLM_JSON_MODE = os.getenv("PMA_LLM_JSON_MODE", "1").strip().lower() in {"1", "true", "yes"}
 
+# ------------------------------------------------------ M5: dashboard ------
+# Base URL of the FastAPI service the Streamlit dashboard talks to (end-to-end
+# via the §8.3 HTTP contract, not in-process imports).
+API_BASE_URL = os.getenv("PMA_API_BASE_URL", "http://127.0.0.1:8000")
+
+
 
