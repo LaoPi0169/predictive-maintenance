@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Predictive Maintenance AI Agent (MVP)
 
 设备预测性维护 AI Agent 的 MVP 实现。总体方案见 [`spec/Project.md`](spec/Project.md)；
@@ -233,3 +234,6 @@ skills/                # 工作流 skills（规格、工具集成、评测、cha
   审批身份为演示级声明式请求头，真实认证属生产加固（spec §8.2）。Agent 不直接控制任何设备。
 - M4 的 `scripted` LLM 是**确定性规则替代实现，不是真实大模型**：评测证明的是编排、
   契约与安全门禁的正确性；真实供应商经 `PMA_LLM_*` 环境变量接入后须重跑同套评测。
+=======
+# predictive-maintenance
+>>>>>>> 6f003b2f158caee0f1b8dbc4fb25fcf16d5e9755
